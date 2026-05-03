@@ -130,6 +130,23 @@ class CollectionMetadata:
         """
         raise NotImplementedError(self.set_calendar_user_address_set)
 
+    def get_calendar_user_type(self) -> str:
+        """Get the calendar-user-type (RFC 6638 §2.4.2).
+
+        Returns: one of INDIVIDUAL, GROUP, RESOURCE, ROOM, UNKNOWN.
+        Raises: KeyError if not set
+        """
+        raise NotImplementedError(self.get_calendar_user_type)
+
+    def set_calendar_user_type(self, cutype: str | None) -> None:
+        """Set the calendar-user-type.
+
+        Args:
+            cutype: one of INDIVIDUAL/GROUP/RESOURCE/ROOM/UNKNOWN, or
+                None to unset.
+        """
+        raise NotImplementedError(self.set_calendar_user_type)
+
 
 class FileBasedCollectionMetadata(CollectionMetadata):
     """Metadata for a configuration."""
@@ -261,3 +278,22 @@ class FileBasedCollectionMetadata(CollectionMetadata):
             ) and not self._configparser.options("scheduling"):
                 self._configparser.remove_section("scheduling")
         self._save("Set calendar-user-address-set.")
+
+    def get_calendar_user_type(self):
+        if not self._configparser.has_option("scheduling", "user-type"):
+            raise KeyError
+        return self._configparser.get("scheduling", "user-type")
+
+    def set_calendar_user_type(self, cutype):
+        if cutype is not None:
+            if not self._configparser.has_section("scheduling"):
+                self._configparser.add_section("scheduling")
+            self._configparser.set("scheduling", "user-type", cutype)
+        else:
+            if self._configparser.has_option("scheduling", "user-type"):
+                self._configparser.remove_option("scheduling", "user-type")
+            if self._configparser.has_section(
+                "scheduling"
+            ) and not self._configparser.options("scheduling"):
+                self._configparser.remove_section("scheduling")
+        self._save("Set calendar-user-type.")

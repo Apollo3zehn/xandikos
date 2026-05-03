@@ -2093,3 +2093,62 @@ class AttendeeWriteRestrictionTests(unittest.TestCase):
         asyncio.run(
             self._bob_calendar().pre_put_hook("event.ics", [moved], "text/calendar")
         )
+
+
+class PrincipalCalendarUserTypeTests(unittest.TestCase):
+    """Tests for per-principal calendar-user-type storage."""
+
+    def setUp(self):
+        super().setUp()
+        self.tempdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tempdir)
+        self.backend = SingleUserFilesystemBackend(self.tempdir)
+        self.backend.create_principal("/alice")
+        self.principal = self.backend.get_principal("/alice")
+
+    def test_default_is_individual(self):
+        from xandikos import scheduling
+
+        self.assertEqual(
+            scheduling.CALENDAR_USER_TYPE_INDIVIDUAL,
+            self.principal.get_calendar_user_type(),
+        )
+
+    def test_set_then_get_round_trips(self):
+        from xandikos import scheduling
+
+        self.principal.set_calendar_user_type(scheduling.CALENDAR_USER_TYPE_RESOURCE)
+        self.assertEqual(
+            scheduling.CALENDAR_USER_TYPE_RESOURCE,
+            self.principal.get_calendar_user_type(),
+        )
+
+    def test_set_none_restores_default(self):
+        from xandikos import scheduling
+
+        self.principal.set_calendar_user_type(scheduling.CALENDAR_USER_TYPE_GROUP)
+        self.principal.set_calendar_user_type(None)
+        self.assertEqual(
+            scheduling.CALENDAR_USER_TYPE_INDIVIDUAL,
+            self.principal.get_calendar_user_type(),
+        )
+
+    def test_invalid_cutype_rejected(self):
+        with self.assertRaises(ValueError):
+            self.principal.set_calendar_user_type("BANANA")
+
+    def test_addresses_and_user_type_coexist(self):
+        # Both keys live under [scheduling]; setting one shouldn't
+        # clobber the other.
+        from xandikos import scheduling
+
+        self.principal.set_calendar_user_address_set(["mailto:a@example.com"])
+        self.principal.set_calendar_user_type(scheduling.CALENDAR_USER_TYPE_ROOM)
+        self.assertEqual(
+            ["mailto:a@example.com"],
+            self.principal.get_calendar_user_address_set(),
+        )
+        self.assertEqual(
+            scheduling.CALENDAR_USER_TYPE_ROOM,
+            self.principal.get_calendar_user_type(),
+        )

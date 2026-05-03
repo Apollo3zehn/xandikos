@@ -480,6 +480,79 @@ class CalendarUserTypePropertyTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_set_value_passes_text(self):
+        """PROPPATCH passes the new value as the element's text."""
+
+        async def run_test():
+            prop = scheduling.CalendarUserTypeProperty()
+            captured: list[str | None] = []
+
+            class MockResource:
+                def set_calendar_user_type(self, cutype):
+                    captured.append(cutype)
+
+            el = ET.Element(prop.name)
+            el.text = "RESOURCE"
+            await prop.set_value("/principals/projector/", MockResource(), el)
+            self.assertEqual(["RESOURCE"], captured)
+
+        asyncio.run(run_test())
+
+    def test_set_value_remove_clears_type(self):
+        """PROPPATCH remove (el is None) calls setter with None."""
+
+        async def run_test():
+            prop = scheduling.CalendarUserTypeProperty()
+            captured: list[str | None] = []
+
+            class MockResource:
+                def set_calendar_user_type(self, cutype):
+                    captured.append(cutype)
+
+            await prop.set_value("/principals/projector/", MockResource(), None)
+            self.assertEqual([None], captured)
+
+        asyncio.run(run_test())
+
+    def test_set_value_empty_text_clears_type(self):
+        """An empty/whitespace value is treated as a remove."""
+
+        async def run_test():
+            prop = scheduling.CalendarUserTypeProperty()
+            captured: list[str | None] = []
+
+            class MockResource:
+                def set_calendar_user_type(self, cutype):
+                    captured.append(cutype)
+
+            el = ET.Element(prop.name)
+            el.text = "  "
+            await prop.set_value("/principals/projector/", MockResource(), el)
+            self.assertEqual([None], captured)
+
+        asyncio.run(run_test())
+
+    def test_set_value_invalid_raises_precondition(self):
+        """Unrecognised cutype values raise a precondition failure."""
+
+        async def run_test():
+            prop = scheduling.CalendarUserTypeProperty()
+
+            class MockResource:
+                def set_calendar_user_type(self, cutype):
+                    raise ValueError(f"bad: {cutype}")
+
+            el = ET.Element(prop.name)
+            el.text = "BANANA"
+            with self.assertRaises(webdav.PreconditionFailure) as ctx:
+                await prop.set_value("/principals/p/", MockResource(), el)
+            self.assertEqual(
+                "{urn:ietf:params:xml:ns:caldav}valid-calendar-user-type",
+                ctx.exception.precondition,
+            )
+
+        asyncio.run(run_test())
+
 
 class ScheduleDefaultCalendarURLPropertyTests(unittest.TestCase):
     """Tests for ScheduleDefaultCalendarURLProperty (RFC 6638 Section 9.2)."""

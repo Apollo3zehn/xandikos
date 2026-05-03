@@ -1741,8 +1741,32 @@ class Principal(webdav.Principal):
         return []
 
     def get_calendar_user_type(self):
-        # TODO(jelmer)
-        return scheduling.CALENDAR_USER_TYPE_INDIVIDUAL
+        """Return the calendar-user-type for this principal.
+
+        Reads from the principal's ``.xandikos`` config (a
+        :class:`FileBasedCollectionMetadata` instance), falling back
+        to ``INDIVIDUAL`` (RFC 6638 §2.4.2's default) when nothing is
+        configured. Set via PROPPATCH on the ``calendar-user-type``
+        property.
+        """
+        try:
+            return self._metadata().get_calendar_user_type()
+        except KeyError:
+            return scheduling.CALENDAR_USER_TYPE_INDIVIDUAL
+
+    def set_calendar_user_type(self, cutype: str | None) -> None:
+        """Persist the principal's calendar-user-type.
+
+        Delegates to :class:`FileBasedCollectionMetadata` backed by
+        the principal's ``.xandikos`` config file. ``None`` unsets
+        the key, restoring the INDIVIDUAL default.
+        """
+        if cutype is not None and cutype not in scheduling.CALENDAR_USER_TYPES:
+            raise ValueError(
+                f"calendar-user-type must be one of "
+                f"{', '.join(scheduling.CALENDAR_USER_TYPES)}, got {cutype!r}"
+            )
+        self._metadata().set_calendar_user_type(cutype)
 
     def get_calendar_proxy_read_for(self):
         # TODO(jelmer)

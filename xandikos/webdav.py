@@ -1402,6 +1402,16 @@ class Principal(Resource):
         """
         raise NotImplementedError(self.set_calendar_user_address_set)
 
+    def set_calendar_user_type(self, cutype: str | None) -> None:
+        """Set the principal's calendar-user-type (RFC 6638 §2.4.2).
+
+        Default raises NotImplementedError so PROPPATCH on
+        calendar-user-type returns 403 on backends that haven't
+        implemented persistent storage. ``None`` removes any
+        persisted value.
+        """
+        raise NotImplementedError(self.set_calendar_user_type)
+
 
 async def get_property_from_name(
     href: str, resource: Resource, properties, name: str, environ
