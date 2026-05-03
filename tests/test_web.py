@@ -1347,6 +1347,41 @@ class ScheduleInboxDefaultCalendarTests(unittest.TestCase):
         # one of the two calendars — not nothing, not something else.
         self.assertIn(url, {"/alice/calendars/calendar", "/alice/calendars/work"})
 
+    def test_principal_override_wins_over_auto_pick(self):
+        from xandikos.store import STORE_TYPE_CALENDAR
+
+        self.backend.create_principal("/alice", create_defaults=True)
+        extra = self.backend.create_collection("/alice/calendars/work")
+        extra.store.set_type(STORE_TYPE_CALENDAR)
+
+        # Explicitly nominate the second calendar as the default.
+        self._inbox().set_schedule_default_calendar_url("/alice/calendars/work")
+
+        self.assertEqual(
+            "/alice/calendars/work",
+            self._inbox().get_schedule_default_calendar_url(),
+        )
+
+    def test_setting_none_restores_auto_pick(self):
+        self.backend.create_principal("/alice", create_defaults=True)
+        inbox = self._inbox()
+        inbox.set_schedule_default_calendar_url("/alice/calendars/some-other")
+        inbox.set_schedule_default_calendar_url(None)
+        # Auto-pick is back: /alice/calendars/calendar from create_defaults.
+        self.assertEqual(
+            "/alice/calendars/calendar",
+            self._inbox().get_schedule_default_calendar_url(),
+        )
+
+    def test_override_persists_across_inbox_lookups(self):
+        self.backend.create_principal("/alice", create_defaults=True)
+        self._inbox().set_schedule_default_calendar_url("/alice/calendars/other")
+        # Refetch the inbox object; the override should still be visible.
+        self.assertEqual(
+            "/alice/calendars/other",
+            self._inbox().get_schedule_default_calendar_url(),
+        )
+
 
 class InboxAutoProcessingTests(unittest.TestCase):
     """End-to-end tests for RFC 6638 §3.1 implicit-scheduling.

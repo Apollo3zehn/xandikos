@@ -435,3 +435,13 @@ class ScheduleDefaultCalendarURLProperty(webdav.Property):
         url = resource.get_schedule_default_calendar_url()
         if url is not None:
             el.append(webdav.create_href(url, href))
+
+    async def set_value(self, href, resource, el):
+        if el is None:
+            resource.set_schedule_default_calendar_url(None)
+            return
+        href_el = el.find("{DAV:}href")
+        if href_el is None or not href_el.text or not href_el.text.strip():
+            resource.set_schedule_default_calendar_url(None)
+            return
+        resource.set_schedule_default_calendar_url(href_el.text.strip())

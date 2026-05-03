@@ -587,19 +587,26 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
     """A schedling inbox collection."""
 
     def get_schedule_default_calendar_url(self) -> str | None:
-        """Pick a default calendar in the owning principal's calendar-home.
+        """Return the default calendar URL for incoming iTIP messages.
 
-        RFC 6638 §9.2 lets an inbox advertise a single calendar where
+        RFC 6638 §9.2: the inbox advertises a single calendar where
         clients should look (and where scheduling deliveries land) by
-        default. Without per-principal configuration we just pick the
-        first calendar resource found by walking each calendar-home
-        the principal advertises, in order. Returns ``None`` if the
-        principal has no calendars yet.
+        default. The principal can override the choice via PROPPATCH;
+        without an override we walk each calendar-home the principal
+        advertises and pick the first calendar resource we find.
+        Returns ``None`` if the principal has no calendars yet.
         """
         owning = scheduling.find_owning_principal(self.backend, self.relpath)
         if owning is None:
             return None
         principal_path, principal = owning
+
+        # Check if the principal has explicitly nominated a default.
+        try:
+            return principal.get_schedule_default_calendar_url()
+        except KeyError:
+            pass
+
         for home in principal.get_calendar_home_set():
             home_path = posixpath.join(principal_path, home)
             home_resource = self.backend.get_resource(home_path)
@@ -609,6 +616,22 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
                 if caldav.CALENDAR_RESOURCE_TYPE in member.resource_types:
                     return posixpath.join(home_path, name)
         return None
+
+    def set_schedule_default_calendar_url(self, url: str | None) -> None:
+        """Persist the default calendar choice on the owning principal.
+
+        Stored in the principal's ``.xandikos`` config; ``None``
+        unsets the override and restores the auto-pick.
+        """
+        owning = scheduling.find_owning_principal(self.backend, self.relpath)
+        if owning is None:
+            raise webdav.PreconditionFailure(
+                "{%s}valid-schedule-default-calendar-URL" % caldav.NAMESPACE,
+                "Cannot set schedule-default-calendar-URL: inbox has no "
+                "owning principal.",
+            )
+        _, principal = owning
+        principal.set_schedule_default_calendar_url(url)
 
     async def post_create_member_hook(
         self,
@@ -1767,6 +1790,24 @@ class Principal(webdav.Principal):
                 f"{', '.join(scheduling.CALENDAR_USER_TYPES)}, got {cutype!r}"
             )
         self._metadata().set_calendar_user_type(cutype)
+
+    def get_schedule_default_calendar_url(self) -> str:
+        """Return the principal-nominated default calendar URL.
+
+        Reads from the principal's ``.xandikos`` config; raises
+        :class:`KeyError` if the principal hasn't set one. The
+        scheduling inbox falls back to auto-picking when no override
+        is configured.
+        """
+        return self._metadata().get_schedule_default_calendar_url()
+
+    def set_schedule_default_calendar_url(self, url: str | None) -> None:
+        """Persist the principal's nominated default calendar URL.
+
+        Delegates to :class:`FileBasedCollectionMetadata`. ``None``
+        unsets the key and restores the inbox's auto-pick.
+        """
+        self._metadata().set_schedule_default_calendar_url(url)
 
     def get_calendar_proxy_read_for(self):
         # TODO(jelmer)

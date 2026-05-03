@@ -623,6 +623,56 @@ class ScheduleDefaultCalendarURLPropertyTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_set_value_passes_href(self):
+        """PROPPATCH passes a D:href child whose text is the new URL."""
+
+        async def run_test():
+            prop = scheduling.ScheduleDefaultCalendarURLProperty()
+            captured: list[str | None] = []
+
+            class MockResource:
+                def set_schedule_default_calendar_url(self, url):
+                    captured.append(url)
+
+            el = ET.Element(prop.name)
+            ET.SubElement(el, "{DAV:}href").text = "/alice/calendars/work"
+            await prop.set_value("/alice/inbox/", MockResource(), el)
+            self.assertEqual(["/alice/calendars/work"], captured)
+
+        asyncio.run(run_test())
+
+    def test_set_value_remove_clears(self):
+        async def run_test():
+            prop = scheduling.ScheduleDefaultCalendarURLProperty()
+            captured: list[str | None] = []
+
+            class MockResource:
+                def set_schedule_default_calendar_url(self, url):
+                    captured.append(url)
+
+            await prop.set_value("/alice/inbox/", MockResource(), None)
+            self.assertEqual([None], captured)
+
+        asyncio.run(run_test())
+
+    def test_set_value_empty_href_clears(self):
+        """An empty/whitespace D:href is treated as remove."""
+
+        async def run_test():
+            prop = scheduling.ScheduleDefaultCalendarURLProperty()
+            captured: list[str | None] = []
+
+            class MockResource:
+                def set_schedule_default_calendar_url(self, url):
+                    captured.append(url)
+
+            el = ET.Element(prop.name)
+            ET.SubElement(el, "{DAV:}href").text = "  "
+            await prop.set_value("/alice/inbox/", MockResource(), el)
+            self.assertEqual([None], captured)
+
+        asyncio.run(run_test())
+
 
 class ScheduleInboxTests(unittest.TestCase):
     """Tests for ScheduleInbox resource type."""

@@ -1412,6 +1412,23 @@ class Principal(Resource):
         """
         raise NotImplementedError(self.set_calendar_user_type)
 
+    def get_schedule_default_calendar_url(self) -> str:
+        """Get the principal-nominated default calendar URL (RFC 6638 §9.2).
+
+        Returns: URL of the default calendar.
+        Raises: KeyError if not set
+        """
+        raise NotImplementedError(self.get_schedule_default_calendar_url)
+
+    def set_schedule_default_calendar_url(self, url: str | None) -> None:
+        """Set the principal-nominated default calendar URL.
+
+        Default raises NotImplementedError so PROPPATCH returns 403
+        on backends that haven't implemented persistent storage.
+        ``None`` removes any persisted value.
+        """
+        raise NotImplementedError(self.set_schedule_default_calendar_url)
+
 
 async def get_property_from_name(
     href: str, resource: Resource, properties, name: str, environ
