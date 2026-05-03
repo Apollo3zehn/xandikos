@@ -25,7 +25,7 @@ import shutil
 import tempfile
 import unittest
 
-from xandikos import caldav
+from xandikos import caldav, webdav
 from xandikos.icalendar import ICalendarFile
 from xandikos.store.git import TreeGitStore
 from xandikos.web import (
@@ -1948,3 +1948,148 @@ class PrincipalCalendarUserAddressSetTests(unittest.TestCase):
         cp2.read(config_path)
         self.assertEqual("yes", cp2.get("other", "preserve"))
         self.assertEqual("mailto:p@example.com", cp2.get("scheduling", "addresses"))
+
+
+class AttendeeWriteRestrictionTests(unittest.TestCase):
+    """RFC 6638 §3.1: an attendee's PUT may only change their own ATTENDEE."""
+
+    def setUp(self):
+        super().setUp()
+        self.tempdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tempdir)
+        self.backend = SingleUserFilesystemBackend(self.tempdir)
+        self.backend.create_principal("/alice", create_defaults=True)
+        self.backend.create_principal("/bob", create_defaults=True)
+
+        self._addresses = {
+            "/alice": ["mailto:alice@example.com"],
+            "/bob": ["mailto:bob@example.com"],
+        }
+        from xandikos.web import Principal
+
+        original = Principal.get_calendar_user_address_set
+        addresses = self._addresses
+
+        def fake_addresses(principal_self):
+            return addresses.get(principal_self.relpath, [])
+
+        Principal.get_calendar_user_address_set = fake_addresses
+        self.addCleanup(setattr, Principal, "get_calendar_user_address_set", original)
+
+    def _bob_calendar(self) -> CalendarCollection:
+        cal = self.backend.get_resource("/bob/calendars/calendar")
+        assert isinstance(cal, CalendarCollection)
+        return cal
+
+    INVITATION = (
+        b"BEGIN:VCALENDAR\r\n"
+        b"VERSION:2.0\r\n"
+        b"PRODID:-//Test//EN\r\n"
+        b"BEGIN:VEVENT\r\n"
+        b"UID:meet@example.com\r\n"
+        b"DTSTAMP:20260101T120000Z\r\n"
+        b"SEQUENCE:1\r\n"
+        b"DTSTART:20260601T100000Z\r\n"
+        b"DTEND:20260601T110000Z\r\n"
+        b"SUMMARY:Sync\r\n"
+        b"ORGANIZER:mailto:alice@example.com\r\n"
+        b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com\r\n"
+        b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:carol@example.com\r\n"
+        b"END:VEVENT\r\n"
+        b"END:VCALENDAR\r\n"
+    )
+
+    def _put(self, body):
+        return asyncio.run(
+            self._bob_calendar().pre_put_hook("event.ics", [body], "text/calendar")
+        )
+
+    def _seed(self):
+        self._bob_calendar().store.import_one(
+            "event.ics", "text/calendar", [self.INVITATION]
+        )
+
+    def test_partstat_change_allowed(self):
+        self._seed()
+        accepted = self.INVITATION.replace(
+            b"PARTSTAT=NEEDS-ACTION:mailto:bob@example.com",
+            b"PARTSTAT=ACCEPTED:mailto:bob@example.com",
+        )
+        # Should not raise — the only diff is bob's own PARTSTAT.
+        self._put(accepted)
+
+    def test_dtstart_change_rejected(self):
+        self._seed()
+        moved = self.INVITATION.replace(
+            b"DTSTART:20260601T100000Z", b"DTSTART:20260601T140000Z"
+        )
+        with self.assertRaises(webdav.PreconditionFailure) as ctx:
+            self._put(moved)
+        self.assertEqual(
+            "{urn:ietf:params:xml:ns:caldav}attendee-allowed",
+            ctx.exception.precondition,
+        )
+
+    def test_summary_change_rejected(self):
+        self._seed()
+        renamed = self.INVITATION.replace(b"SUMMARY:Sync", b"SUMMARY:Hijacked")
+        with self.assertRaises(webdav.PreconditionFailure):
+            self._put(renamed)
+
+    def test_organiser_change_rejected(self):
+        self._seed()
+        usurped = self.INVITATION.replace(
+            b"ORGANIZER:mailto:alice@example.com",
+            b"ORGANIZER:mailto:bob@example.com",
+        )
+        with self.assertRaises(webdav.PreconditionFailure):
+            self._put(usurped)
+
+    def test_dropping_other_attendee_rejected(self):
+        self._seed()
+        without_carol = self.INVITATION.replace(
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:carol@example.com\r\n",
+            b"",
+        )
+        with self.assertRaises(webdav.PreconditionFailure):
+            self._put(without_carol)
+
+    def test_changing_other_attendee_partstat_rejected(self):
+        # Bob can update his own PARTSTAT but not carol's.
+        self._seed()
+        forged = self.INVITATION.replace(
+            b"PARTSTAT=NEEDS-ACTION:mailto:carol@example.com",
+            b"PARTSTAT=DECLINED:mailto:carol@example.com",
+        )
+        with self.assertRaises(webdav.PreconditionFailure):
+            self._put(forged)
+
+    def test_first_import_not_restricted(self):
+        # No prior copy in bob's calendar — restriction only applies to
+        # updates of an existing scheduling object.
+        self._put(self.INVITATION)  # should not raise
+
+    def test_self_organised_event_unrestricted(self):
+        # Bob is the organiser of his own event. Restrictions only apply
+        # when the user is an attendee, not the organiser.
+        body = (
+            b"BEGIN:VCALENDAR\r\n"
+            b"VERSION:2.0\r\n"
+            b"PRODID:-//Test//EN\r\n"
+            b"BEGIN:VEVENT\r\n"
+            b"UID:bobs@example.com\r\n"
+            b"DTSTAMP:20260101T120000Z\r\n"
+            b"DTSTART:20260601T100000Z\r\n"
+            b"DTEND:20260601T110000Z\r\n"
+            b"SUMMARY:Solo\r\n"
+            b"ORGANIZER:mailto:bob@example.com\r\n"
+            b"ATTENDEE:mailto:bob@example.com\r\n"
+            b"END:VEVENT\r\n"
+            b"END:VCALENDAR\r\n"
+        )
+        self._bob_calendar().store.import_one("event.ics", "text/calendar", [body])
+        moved = body.replace(b"DTSTART:20260601T100000Z", b"DTSTART:20260601T140000Z")
+        # Should not raise — bob is the organiser of this one.
+        asyncio.run(
+            self._bob_calendar().pre_put_hook("event.ics", [moved], "text/calendar")
+        )

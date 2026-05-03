@@ -1124,6 +1124,20 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
             if new_sig == old_sig:
                 return None
 
+            # RFC 6638 §3.1: an attendee may only modify their own
+            # ATTENDEE entry on a stored scheduling object — the rest
+            # of the event (DTSTART/DTEND, ATTENDEE list, ORGANIZER,
+            # SUMMARY, …) is owned by the organiser. If the user was
+            # an attendee on the prior version (and not also the
+            # organiser), check that they aren't reaching past their
+            # own ATTENDEE entry.
+            old_was_organiser, _ = _organiser_attendees(old_cal, own_addresses)
+            old_was_attendee = _own_attendee_address(old_cal, own_addresses) is not None
+            if old_was_attendee and not old_was_organiser:
+                self._reject_unauthorised_attendee_change(
+                    new_cal, old_cal, own_addresses
+                )
+
         is_organiser, new_attendees = _organiser_attendees(new_cal, own_addresses)
         if is_organiser:
             outcomes = await self._dispatch_organiser_put(
@@ -1137,6 +1151,32 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
         if old_cal is not None:
             await self._dispatch_attendee_put(new_cal, old_cal, own_addresses)
         return None
+
+    def _reject_unauthorised_attendee_change(
+        self,
+        new_cal: Calendar,
+        old_cal: Calendar,
+        own_addresses: set[str],
+    ) -> None:
+        """Raise if *new_cal* changes anything beyond the user's own ATTENDEE.
+
+        Compares scheduling signatures of *old_cal* and *new_cal* with
+        the user's own ATTENDEE parameters masked. If they differ, the
+        user is touching organiser-owned data.
+        """
+        mask = frozenset(own_addresses)
+        new_masked = itip.extract_scheduling_signature(
+            new_cal, mask_own_attendee_params=mask
+        )
+        old_masked = itip.extract_scheduling_signature(
+            old_cal, mask_own_attendee_params=mask
+        )
+        if new_masked != old_masked:
+            raise webdav.PreconditionFailure(
+                "{%s}attendee-allowed" % caldav.NAMESPACE,
+                "Attendees may only modify their own ATTENDEE entry; "
+                "other event properties are organiser-owned (RFC 6638 §3.1).",
+            )
 
     async def _dispatch_organiser_put(
         self,
