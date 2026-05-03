@@ -1141,11 +1141,17 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
         if existing is not None:
             old_cal = await _calendar_from_member(existing)
 
+        # SCHEDULE-FORCE-SEND (RFC 6638 §3.2.4) is a client-only
+        # parameter; consume it from new_cal so it doesn't end up
+        # stored. The captured addresses bypass the normal "nothing
+        # changed, skip" short-circuit and the PARTSTAT-changed gate.
+        force_request, force_reply, rewrite_needed = _consume_force_send(new_cal)
+
         if old_cal is not None:
             new_sig = itip.extract_scheduling_signature(new_cal)
             old_sig = itip.extract_scheduling_signature(old_cal)
-            if new_sig == old_sig:
-                return None
+            if new_sig == old_sig and not (force_request or force_reply):
+                return [new_cal.to_ical()] if rewrite_needed else None
 
             # RFC 6638 §3.1: an attendee may only modify their own
             # ATTENDEE entry on a stored scheduling object — the rest
@@ -1169,10 +1175,16 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
             if outcomes:
                 _annotate_schedule_status(new_cal, outcomes)
                 return [new_cal.to_ical()]
+            if rewrite_needed:
+                return [new_cal.to_ical()]
             return None
 
         if old_cal is not None:
-            await self._dispatch_attendee_put(new_cal, old_cal, own_addresses)
+            await self._dispatch_attendee_put(
+                new_cal, old_cal, own_addresses, force_reply
+            )
+        if rewrite_needed:
+            return [new_cal.to_ical()]
         return None
 
     def _reject_unauthorised_attendee_change(
@@ -1237,6 +1249,7 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
         new_cal: Calendar,
         old_cal: Calendar,
         own_addresses: set[str],
+        force_reply: set[str],
     ) -> None:
         own_address = _own_attendee_address(new_cal, own_addresses)
         if own_address is None:
@@ -1245,7 +1258,10 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
         if organiser is None or organiser in own_addresses:
             # Self-organised events have nothing to reply to.
             return
-        if not _partstat_changed(new_cal, old_cal, own_address):
+        # SCHEDULE-FORCE-SEND=REPLY on the user's own ATTENDEE
+        # (RFC 6638 §3.2.4) bypasses the PARTSTAT-changed gate.
+        forced = own_address in force_reply
+        if not forced and not _partstat_changed(new_cal, old_cal, own_address):
             return
         reply = itip.build_itip_reply(new_cal, own_address)
         await scheduling.deliver_to_inbox(
@@ -1310,6 +1326,45 @@ def _annotate_schedule_status(cal: Calendar, outcomes: dict[str, str]) -> None:
             status = outcomes.get(str(a))
             if status is not None:
                 a.params["SCHEDULE-STATUS"] = status
+
+
+def _consume_force_send(cal: Calendar) -> tuple[set[str], set[str], bool]:
+    """Find and strip SCHEDULE-FORCE-SEND parameters on ATTENDEE entries.
+
+    RFC 6638 §3.2.4: a client may attach ``SCHEDULE-FORCE-SEND=REQUEST``
+    or ``SCHEDULE-FORCE-SEND=REPLY`` to an ATTENDEE to instruct the
+    server to dispatch an iTIP message to that attendee even when no
+    iTIP-significant change has happened. The parameter is a request
+    to the server and is removed from the stored representation.
+
+    Returns ``(force_request, force_reply, stripped)``. The first two
+    are sets of attendee addresses by FORCE-SEND value. ``stripped``
+    is True if any SCHEDULE-FORCE-SEND parameter was removed
+    (including ones with unrecognised values, which are dropped per
+    the spec but don't trigger delivery). ``cal`` is mutated in place.
+    """
+    force_request: set[str] = set()
+    force_reply: set[str] = set()
+    stripped = False
+    for comp in cal.subcomponents:
+        if comp.name not in itip.SCHEDULING_COMPONENTS:
+            continue
+        attendees = comp.get("ATTENDEE", [])
+        if not isinstance(attendees, list):
+            attendees = [attendees]
+        for a in attendees:
+            value = a.params.get("SCHEDULE-FORCE-SEND")
+            if value is None:
+                continue
+            mode = str(value).upper()
+            del a.params["SCHEDULE-FORCE-SEND"]
+            stripped = True
+            if mode == "REQUEST":
+                force_request.add(str(a))
+            elif mode == "REPLY":
+                force_reply.add(str(a))
+            # Other values are silently ignored per RFC 6638 §3.2.4.
+    return force_request, force_reply, stripped
 
 
 def _organiser_attendees(

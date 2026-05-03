@@ -2187,3 +2187,184 @@ class PrincipalCalendarUserTypeTests(unittest.TestCase):
             scheduling.CALENDAR_USER_TYPE_ROOM,
             self.principal.get_calendar_user_type(),
         )
+
+
+class ScheduleForceSendTests(unittest.TestCase):
+    """RFC 6638 §3.2.4: SCHEDULE-FORCE-SEND on PUT triggers re-delivery."""
+
+    def setUp(self):
+        super().setUp()
+        self.tempdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tempdir)
+        self.backend = SingleUserFilesystemBackend(self.tempdir)
+        self.backend.create_principal("/alice", create_defaults=True)
+        self.backend.create_principal("/bob", create_defaults=True)
+
+        self._addresses = {
+            "/alice": ["mailto:alice@example.com"],
+            "/bob": ["mailto:bob@example.com"],
+        }
+        from xandikos.web import Principal
+
+        original = Principal.get_calendar_user_address_set
+        addresses = self._addresses
+
+        def fake_addresses(principal_self):
+            return addresses.get(principal_self.relpath, [])
+
+        Principal.get_calendar_user_address_set = fake_addresses
+        self.addCleanup(setattr, Principal, "get_calendar_user_address_set", original)
+
+    def _alice_calendar(self) -> CalendarCollection:
+        cal = self.backend.get_resource("/alice/calendars/calendar")
+        assert isinstance(cal, CalendarCollection)
+        return cal
+
+    def _bob_calendar(self) -> CalendarCollection:
+        cal = self.backend.get_resource("/bob/calendars/calendar")
+        assert isinstance(cal, CalendarCollection)
+        return cal
+
+    def _inbox_event_methods(self, principal: str) -> list[str]:
+        """Return the iTIP METHOD value of each message in *principal*'s inbox."""
+        from icalendar.cal import Calendar as ICalendar
+
+        inbox = self.backend.get_resource(f"{principal}/inbox")
+        assert isinstance(inbox, StoreBasedCollection)
+        store = inbox.store
+        out: list[str] = []
+        for name, _ct, etag in store.iter_with_etag():
+            raw = b"".join(store._get_raw(name, etag))
+            cal = ICalendar.from_ical(raw.decode("utf-8"))
+            method = cal.get("METHOD")
+            out.append(str(method) if method is not None else "")
+        return out
+
+    def _stored_force_send_params(self, rewritten: "list[bytes] | None") -> list[str]:
+        """Return SCHEDULE-FORCE-SEND values present on attendees of rewritten output."""
+        from icalendar.cal import Calendar as ICalendar
+
+        if rewritten is None:
+            return []
+        cal = ICalendar.from_ical(b"".join(rewritten).decode("utf-8"))
+        out: list[str] = []
+        for comp in cal.subcomponents:
+            if comp.name != "VEVENT":
+                continue
+            attendees = comp.get("ATTENDEE", [])
+            if not isinstance(attendees, list):
+                attendees = [attendees]
+            for a in attendees:
+                value = a.params.get("SCHEDULE-FORCE-SEND")
+                if value is not None:
+                    out.append(str(value))
+        return out
+
+    EVENT = (
+        b"BEGIN:VCALENDAR\r\n"
+        b"VERSION:2.0\r\n"
+        b"PRODID:-//Test//EN\r\n"
+        b"BEGIN:VEVENT\r\n"
+        b"UID:meet@example.com\r\n"
+        b"DTSTAMP:20260101T120000Z\r\n"
+        b"SEQUENCE:1\r\n"
+        b"DTSTART:20260601T100000Z\r\n"
+        b"DTEND:20260601T110000Z\r\n"
+        b"SUMMARY:Sync\r\n"
+        b"ORGANIZER:mailto:alice@example.com\r\n"
+        b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com\r\n"
+        b"END:VEVENT\r\n"
+        b"END:VCALENDAR\r\n"
+    )
+
+    def test_organiser_force_send_request_re_delivers_unchanged_event(self):
+        # Seed alice's stored event.
+        self._alice_calendar().store.import_one(
+            "event.ics", "text/calendar", [self.EVENT]
+        )
+        # Same event PUT with SCHEDULE-FORCE-SEND=REQUEST on bob — should
+        # bypass the no-change short-circuit and deliver to bob.
+        forced = self.EVENT.replace(
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com",
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION;SCHEDULE-FORCE-SEND=REQUEST:"
+            b"mailto:bob@example.com",
+        )
+        rewritten = asyncio.run(
+            self._alice_calendar().pre_put_hook("event.ics", [forced], "text/calendar")
+        )
+        self.assertEqual(["REQUEST"], self._inbox_event_methods("/bob"))
+        # The stored event must not carry SCHEDULE-FORCE-SEND.
+        self.assertEqual([], self._stored_force_send_params(rewritten))
+
+    def test_no_force_send_unchanged_event_skips_delivery(self):
+        # Sanity check: without FORCE-SEND, the same PUT short-circuits.
+        self._alice_calendar().store.import_one(
+            "event.ics", "text/calendar", [self.EVENT]
+        )
+        # PUT identical content — only DTSTAMP differs (sig-stable).
+        rewritten = self.EVENT.replace(
+            b"DTSTAMP:20260101T120000Z", b"DTSTAMP:20260202T120000Z"
+        )
+        result = asyncio.run(
+            self._alice_calendar().pre_put_hook(
+                "event.ics", [rewritten], "text/calendar"
+            )
+        )
+        self.assertIsNone(result)
+        self.assertEqual([], self._inbox_event_methods("/bob"))
+
+    def test_attendee_force_send_reply_bypasses_partstat_gate(self):
+        # Bob has the invitation already-accepted in his calendar.
+        accepted = self.EVENT.replace(
+            b"PARTSTAT=NEEDS-ACTION:mailto:bob@example.com",
+            b"PARTSTAT=ACCEPTED:mailto:bob@example.com",
+        )
+        self._bob_calendar().store.import_one("event.ics", "text/calendar", [accepted])
+        # Bob PUTs the same content with SCHEDULE-FORCE-SEND=REPLY on
+        # his own ATTENDEE — the PARTSTAT didn't change, but the server
+        # should still send a REPLY to alice.
+        forced = accepted.replace(
+            b"ATTENDEE;PARTSTAT=ACCEPTED:mailto:bob@example.com",
+            b"ATTENDEE;PARTSTAT=ACCEPTED;SCHEDULE-FORCE-SEND=REPLY:"
+            b"mailto:bob@example.com",
+        )
+        rewritten = asyncio.run(
+            self._bob_calendar().pre_put_hook("event.ics", [forced], "text/calendar")
+        )
+        self.assertEqual(["REPLY"], self._inbox_event_methods("/alice"))
+        # The stored event must not carry SCHEDULE-FORCE-SEND.
+        self.assertEqual([], self._stored_force_send_params(rewritten))
+
+    def test_force_send_param_stripped_on_first_put(self):
+        # First-time PUT with FORCE-SEND — the REQUEST goes out anyway
+        # (it's a new event), and the stored bytes must be clean.
+        forced = self.EVENT.replace(
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com",
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION;SCHEDULE-FORCE-SEND=REQUEST:"
+            b"mailto:bob@example.com",
+        )
+        rewritten = asyncio.run(
+            self._alice_calendar().pre_put_hook("event.ics", [forced], "text/calendar")
+        )
+        self.assertEqual([], self._stored_force_send_params(rewritten))
+        self.assertEqual(["REQUEST"], self._inbox_event_methods("/bob"))
+
+    def test_unrecognised_force_send_value_silently_dropped(self):
+        # Per RFC 6638 §3.2.4 the only legal values are REQUEST and REPLY.
+        # An unknown value should not crash; the param is still stripped
+        # but no forced delivery is triggered.
+        self._alice_calendar().store.import_one(
+            "event.ics", "text/calendar", [self.EVENT]
+        )
+        # Otherwise unchanged event with a bogus FORCE-SEND value.
+        bogus = self.EVENT.replace(
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com",
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION;SCHEDULE-FORCE-SEND=BANANA:"
+            b"mailto:bob@example.com",
+        ).replace(b"DTSTAMP:20260101T120000Z", b"DTSTAMP:20260202T120000Z")
+        rewritten = asyncio.run(
+            self._alice_calendar().pre_put_hook("event.ics", [bogus], "text/calendar")
+        )
+        # Param stripped from stored output, no forced delivery.
+        self.assertEqual([], self._stored_force_send_params(rewritten))
+        self.assertEqual([], self._inbox_event_methods("/bob"))

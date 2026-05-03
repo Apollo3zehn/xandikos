@@ -271,13 +271,22 @@ scheduling resources. The schedule-tag value tracks
 iTIP-significant changes only — bookkeeping property changes
 (DTSTAMP, LAST-MODIFIED) don't move it.
 
+SCHEDULE-FORCE-SEND (§3.2.4)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A client may attach SCHEDULE-FORCE-SEND=REQUEST or =REPLY to an
+ATTENDEE on a PUT to instruct the server to dispatch an iTIP
+message to that attendee even when no iTIP-significant change has
+happened. The parameter is consumed (stripped from the stored
+representation) and triggers the appropriate delivery: REQUEST on
+the organiser path, REPLY on the attendee path. Unrecognised values
+are silently dropped per the spec.
+
 Not implemented
 ^^^^^^^^^^^^^^^
 
 - iMIP (email-based delivery of iTIP messages, RFC 6047) for
   attendees that aren't local principals.
-- SCHEDULE-FORCE-SEND parameter (§3.2.4): a client request to
-  re-send to attendees even when nothing iTIP-relevant has changed.
 - Server-side handling of attendee delegation (DELEGATED-FROM,
   DELEGATED-TO bookkeeping in §3.2.6): the iCalendar properties
   themselves round-trip fine, but the server doesn't generate
