@@ -282,15 +282,24 @@ representation) and triggers the appropriate delivery: REQUEST on
 the organiser path, REPLY on the attendee path. Unrecognised values
 are silently dropped per the spec.
 
+Attendee delegation (§3.2.6)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When an attendee delegates by changing their own ATTENDEE to
+PARTSTAT=DELEGATED;DELEGATED-TO=… and adding an ATTENDEE for the
+delegate with DELEGATED-FROM pointing back at themselves, the
+server allows the addition (it would otherwise fall foul of the
+§3.1 attendee-write restriction), sends an iTIP REPLY to the
+organiser carrying the user's new PARTSTAT=DELEGATED, and sends an
+iTIP REQUEST to the new delegate so the meeting appears on their
+calendar. SCHEDULE-STATUS on the delegate ATTENDEE in the user's
+stored copy records the delivery outcome.
+
 Not implemented
 ^^^^^^^^^^^^^^^
 
 - iMIP (email-based delivery of iTIP messages, RFC 6047) for
   attendees that aren't local principals.
-- Server-side handling of attendee delegation (DELEGATED-FROM,
-  DELEGATED-TO bookkeeping in §3.2.6): the iCalendar properties
-  themselves round-trip fine, but the server doesn't generate
-  CANCEL-to-original-attendee + REQUEST-to-delegate automatically.
 
 rfc6764.txt (Locating groupware services)
 -----------------------------------------

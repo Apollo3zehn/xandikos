@@ -2368,3 +2368,207 @@ class ScheduleForceSendTests(unittest.TestCase):
         # Param stripped from stored output, no forced delivery.
         self.assertEqual([], self._stored_force_send_params(rewritten))
         self.assertEqual([], self._inbox_event_methods("/bob"))
+
+
+class AttendeeDelegationTests(unittest.TestCase):
+    """RFC 6638 §3.2.6: an attendee may add a delegate ATTENDEE on PUT.
+
+    Bob has been invited to alice's event; he can't attend and
+    delegates to dave by:
+    - changing his own ATTENDEE to PARTSTAT=DELEGATED;DELEGATED-TO=…
+    - adding an ATTENDEE for dave with DELEGATED-FROM=mailto:bob@…
+
+    The server should:
+    - allow the PUT (the new ATTENDEE is exempt from §3.1's
+      attendee-write restriction)
+    - send a REPLY to alice carrying bob's PARTSTAT=DELEGATED
+    - send a REQUEST to dave so the meeting appears on his calendar
+    - annotate SCHEDULE-STATUS on dave's ATTENDEE in bob's stored copy
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tempdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tempdir)
+        self.backend = SingleUserFilesystemBackend(self.tempdir)
+        self.backend.create_principal("/alice", create_defaults=True)
+        self.backend.create_principal("/bob", create_defaults=True)
+        self.backend.create_principal("/dave", create_defaults=True)
+
+        self._addresses = {
+            "/alice": ["mailto:alice@example.com"],
+            "/bob": ["mailto:bob@example.com"],
+            "/dave": ["mailto:dave@example.com"],
+        }
+        from xandikos.web import Principal
+
+        original = Principal.get_calendar_user_address_set
+        addresses = self._addresses
+
+        def fake_addresses(principal_self):
+            return addresses.get(principal_self.relpath, [])
+
+        Principal.get_calendar_user_address_set = fake_addresses
+        self.addCleanup(setattr, Principal, "get_calendar_user_address_set", original)
+
+    def _bob_calendar(self) -> CalendarCollection:
+        cal = self.backend.get_resource("/bob/calendars/calendar")
+        assert isinstance(cal, CalendarCollection)
+        return cal
+
+    def _inbox_event_methods(self, principal: str) -> list[str]:
+        from icalendar.cal import Calendar as ICalendar
+
+        inbox = self.backend.get_resource(f"{principal}/inbox")
+        assert isinstance(inbox, StoreBasedCollection)
+        store = inbox.store
+        out: list[str] = []
+        for name, _ct, etag in store.iter_with_etag():
+            raw = b"".join(store._get_raw(name, etag))
+            cal = ICalendar.from_ical(raw.decode("utf-8"))
+            method = cal.get("METHOD")
+            out.append(str(method) if method is not None else "")
+        return out
+
+    def _stored_attendee_params(
+        self, rewritten: "list[bytes] | None"
+    ) -> dict[str, dict[str, str]]:
+        """Return ``{address: {param: value}}`` for ATTENDEEs in *rewritten*."""
+        from icalendar.cal import Calendar as ICalendar
+
+        if rewritten is None:
+            return {}
+        cal = ICalendar.from_ical(b"".join(rewritten).decode("utf-8"))
+        out: dict[str, dict[str, str]] = {}
+        for comp in cal.subcomponents:
+            if comp.name != "VEVENT":
+                continue
+            attendees = comp.get("ATTENDEE", [])
+            if not isinstance(attendees, list):
+                attendees = [attendees]
+            for a in attendees:
+                out[str(a)] = {k: str(v) for k, v in a.params.items()}
+        return out
+
+    INVITATION = (
+        b"BEGIN:VCALENDAR\r\n"
+        b"VERSION:2.0\r\n"
+        b"PRODID:-//Test//EN\r\n"
+        b"BEGIN:VEVENT\r\n"
+        b"UID:meet@example.com\r\n"
+        b"DTSTAMP:20260101T120000Z\r\n"
+        b"SEQUENCE:1\r\n"
+        b"DTSTART:20260601T100000Z\r\n"
+        b"DTEND:20260601T110000Z\r\n"
+        b"SUMMARY:Sync\r\n"
+        b"ORGANIZER:mailto:alice@example.com\r\n"
+        b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com\r\n"
+        b"END:VEVENT\r\n"
+        b"END:VCALENDAR\r\n"
+    )
+
+    DELEGATED = (
+        b"BEGIN:VCALENDAR\r\n"
+        b"VERSION:2.0\r\n"
+        b"PRODID:-//Test//EN\r\n"
+        b"BEGIN:VEVENT\r\n"
+        b"UID:meet@example.com\r\n"
+        b"DTSTAMP:20260101T120000Z\r\n"
+        b"SEQUENCE:1\r\n"
+        b"DTSTART:20260601T100000Z\r\n"
+        b"DTEND:20260601T110000Z\r\n"
+        b"SUMMARY:Sync\r\n"
+        b"ORGANIZER:mailto:alice@example.com\r\n"
+        b'ATTENDEE;PARTSTAT=DELEGATED;DELEGATED-TO="mailto:dave@example.com":'
+        b"mailto:bob@example.com\r\n"
+        b'ATTENDEE;PARTSTAT=NEEDS-ACTION;DELEGATED-FROM="mailto:bob@example.com":'
+        b"mailto:dave@example.com\r\n"
+        b"END:VEVENT\r\n"
+        b"END:VCALENDAR\r\n"
+    )
+
+    def test_delegation_delivers_request_to_delegate_and_reply_to_organiser(self):
+        # Bob has alice's invitation in his calendar.
+        self._bob_calendar().store.import_one(
+            "event.ics", "text/calendar", [self.INVITATION]
+        )
+        # Bob delegates to dave.
+        rewritten = asyncio.run(
+            self._bob_calendar().pre_put_hook(
+                "event.ics", [self.DELEGATED], "text/calendar"
+            )
+        )
+        # Both the organiser (REPLY) and the delegate (REQUEST) received iTIP.
+        self.assertEqual(["REPLY"], self._inbox_event_methods("/alice"))
+        self.assertEqual(["REQUEST"], self._inbox_event_methods("/dave"))
+        # Bob's stored copy carries SCHEDULE-STATUS on dave's ATTENDEE.
+        params = self._stored_attendee_params(rewritten)
+        self.assertEqual(
+            "2.0;Success",
+            params["mailto:dave@example.com"]["SCHEDULE-STATUS"],
+        )
+
+    def test_delegation_to_remote_address_skipped_silently(self):
+        # Bob delegates to a non-local address.
+        self._bob_calendar().store.import_one(
+            "event.ics", "text/calendar", [self.INVITATION]
+        )
+        delegated_remote = self.DELEGATED.replace(
+            b"mailto:dave@example.com", b"mailto:remote@elsewhere.example"
+        )
+        rewritten = asyncio.run(
+            self._bob_calendar().pre_put_hook(
+                "event.ics", [delegated_remote], "text/calendar"
+            )
+        )
+        # Alice still gets the REPLY.
+        self.assertEqual(["REPLY"], self._inbox_event_methods("/alice"))
+        # The remote delegate has no inbox to receive into; SCHEDULE-STATUS
+        # records 3.7.
+        params = self._stored_attendee_params(rewritten)
+        self.assertEqual(
+            "3.7;Invalid calendar user",
+            params["mailto:remote@elsewhere.example"]["SCHEDULE-STATUS"],
+        )
+
+    def test_attendee_cannot_smuggle_non_delegate_attendee_addition(self):
+        # Bob tries to add eve as an ATTENDEE without DELEGATED-FROM —
+        # that's an organiser-only change and should be refused.
+        self._bob_calendar().store.import_one(
+            "event.ics", "text/calendar", [self.INVITATION]
+        )
+        smuggled = self.INVITATION.replace(
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com\r\n",
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com\r\n"
+            b"ATTENDEE:mailto:eve@example.com\r\n",
+        )
+        with self.assertRaises(webdav.PreconditionFailure) as ctx:
+            asyncio.run(
+                self._bob_calendar().pre_put_hook(
+                    "event.ics", [smuggled], "text/calendar"
+                )
+            )
+        self.assertEqual(
+            "{urn:ietf:params:xml:ns:caldav}attendee-allowed",
+            ctx.exception.precondition,
+        )
+
+    def test_delegation_first_put_delivers_to_delegate(self):
+        # No prior version in bob's calendar; the §3.1 restriction
+        # only applies on update. Even on first PUT, the delegate
+        # receives a REQUEST.
+        rewritten = asyncio.run(
+            self._bob_calendar().pre_put_hook(
+                "event.ics", [self.DELEGATED], "text/calendar"
+            )
+        )
+        self.assertEqual(["REQUEST"], self._inbox_event_methods("/dave"))
+        # And alice's REPLY only fires when there's a prior version to
+        # compare PARTSTAT against. First PUT → no REPLY.
+        self.assertEqual([], self._inbox_event_methods("/alice"))
+        # Stored copy reflects the delivery.
+        params = self._stored_attendee_params(rewritten)
+        self.assertEqual(
+            "2.0;Success",
+            params["mailto:dave@example.com"]["SCHEDULE-STATUS"],
+        )

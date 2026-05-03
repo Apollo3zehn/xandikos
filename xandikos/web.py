@@ -1147,6 +1147,11 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
         # changed, skip" short-circuit and the PARTSTAT-changed gate.
         force_request, force_reply, rewrite_needed = _consume_force_send(new_cal)
 
+        old_delegates = (
+            _delegates_of(old_cal, own_addresses) if old_cal is not None else set()
+        )
+        new_delegates = _delegates_of(new_cal, own_addresses) - old_delegates
+
         if old_cal is not None:
             new_sig = itip.extract_scheduling_signature(new_cal)
             old_sig = itip.extract_scheduling_signature(old_cal)
@@ -1159,12 +1164,15 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
             # SUMMARY, …) is owned by the organiser. If the user was
             # an attendee on the prior version (and not also the
             # organiser), check that they aren't reaching past their
-            # own ATTENDEE entry.
+            # own ATTENDEE entry. Adding an ATTENDEE that's a
+            # delegate of the user (DELEGATED-FROM matching one of
+            # own_addresses) is the documented exception
+            # (RFC 6638 §3.2.6).
             old_was_organiser, _ = _organiser_attendees(old_cal, own_addresses)
             old_was_attendee = _own_attendee_address(old_cal, own_addresses) is not None
             if old_was_attendee and not old_was_organiser:
                 self._reject_unauthorised_attendee_change(
-                    new_cal, old_cal, own_addresses
+                    new_cal, old_cal, own_addresses, new_delegates
                 )
 
         is_organiser, new_attendees = _organiser_attendees(new_cal, own_addresses)
@@ -1179,10 +1187,12 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
                 return [new_cal.to_ical()]
             return None
 
-        if old_cal is not None:
-            await self._dispatch_attendee_put(
-                new_cal, old_cal, own_addresses, force_reply
-            )
+        outcomes = await self._dispatch_attendee_put(
+            new_cal, old_cal, own_addresses, force_reply, new_delegates
+        )
+        if outcomes:
+            _annotate_schedule_status(new_cal, outcomes)
+            return [new_cal.to_ical()]
         if rewrite_needed:
             return [new_cal.to_ical()]
         return None
@@ -1192,25 +1202,31 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
         new_cal: Calendar,
         old_cal: Calendar,
         own_addresses: set[str],
+        new_delegates: set[str],
     ) -> None:
         """Raise if *new_cal* changes anything beyond the user's own ATTENDEE.
 
         Compares scheduling signatures of *old_cal* and *new_cal* with
-        the user's own ATTENDEE parameters masked. If they differ, the
-        user is touching organiser-owned data.
+        the user's own ATTENDEE parameters masked, and any newly-added
+        delegates skipped entirely (RFC 6638 §3.2.6 lets an attendee
+        add a delegate ATTENDEE, distinguishable by its DELEGATED-FROM
+        pointing back at the user). If anything else differs, the user
+        is touching organiser-owned data.
         """
         mask = frozenset(own_addresses)
+        skip = frozenset(new_delegates)
         new_masked = itip.extract_scheduling_signature(
-            new_cal, mask_own_attendee_params=mask
+            new_cal, mask_own_attendee_params=mask, skip_attendees=skip
         )
         old_masked = itip.extract_scheduling_signature(
-            old_cal, mask_own_attendee_params=mask
+            old_cal, mask_own_attendee_params=mask, skip_attendees=skip
         )
         if new_masked != old_masked:
             raise webdav.PreconditionFailure(
                 "{%s}attendee-allowed" % caldav.NAMESPACE,
-                "Attendees may only modify their own ATTENDEE entry; "
-                "other event properties are organiser-owned (RFC 6638 §3.1).",
+                "Attendees may only modify their own ATTENDEE entry "
+                "(or add delegates via DELEGATED-FROM); other event "
+                "properties are organiser-owned (RFC 6638 §3.1).",
             )
 
     async def _dispatch_organiser_put(
@@ -1247,26 +1263,51 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
     async def _dispatch_attendee_put(
         self,
         new_cal: Calendar,
-        old_cal: Calendar,
+        old_cal: Calendar | None,
         own_addresses: set[str],
         force_reply: set[str],
-    ) -> None:
+        new_delegates: set[str],
+    ) -> dict[str, str]:
+        """Send REPLY to organiser and REQUEST to any newly-added delegates.
+
+        Returns ``{address: SCHEDULE-STATUS code}`` for the delegate
+        deliveries; the REPLY itself isn't annotated (the user's own
+        ATTENDEE doesn't carry SCHEDULE-STATUS).
+        """
+        outcomes: dict[str, str] = {}
+
+        # RFC 6638 §3.2.6: when the user delegates to someone else,
+        # the new delegate needs a REQUEST so they see the meeting.
+        if new_delegates:
+            request = itip.build_itip_request(new_cal)
+            for address in new_delegates:
+                outcomes[address] = await _deliver_status(
+                    self.backend, address, request
+                )
+
         own_address = _own_attendee_address(new_cal, own_addresses)
         if own_address is None:
-            return
+            return outcomes
         organiser = _organiser_address(new_cal)
         if organiser is None or organiser in own_addresses:
             # Self-organised events have nothing to reply to.
-            return
+            return outcomes
+        # REPLY semantics need a prior version to compare PARTSTAT
+        # against. On a first PUT (no prior) the only thing this path
+        # might have done is dispatch delegate REQUESTs above; nothing
+        # to REPLY to.
+        if old_cal is None:
+            return outcomes
         # SCHEDULE-FORCE-SEND=REPLY on the user's own ATTENDEE
         # (RFC 6638 §3.2.4) bypasses the PARTSTAT-changed gate.
         forced = own_address in force_reply
         if not forced and not _partstat_changed(new_cal, old_cal, own_address):
-            return
+            return outcomes
         reply = itip.build_itip_reply(new_cal, own_address)
         await scheduling.deliver_to_inbox(
             self.backend, organiser, reply, name_hint=None
         )
+        return outcomes
 
     def _owning_principal(self) -> webdav.Principal | None:
         owning = scheduling.find_owning_principal(self.backend, self.relpath)
@@ -1395,6 +1436,34 @@ def _organiser_attendees(
             if addr not in organiser_addresses:
                 attendees.add(addr)
     return is_organiser, attendees
+
+
+def _delegates_of(cal: Calendar, own_addresses: set[str]) -> set[str]:
+    """Return ATTENDEE addresses delegated FROM one of *own_addresses*.
+
+    RFC 5545 §3.8.4.4: an ATTENDEE may carry DELEGATED-FROM listing
+    the address(es) that delegated to them. We pick the entries
+    whose DELEGATED-FROM matches the user — those are the user's
+    delegates and the user is allowed to add them on a PUT
+    (RFC 6638 §3.2.6).
+    """
+    out: set[str] = set()
+    for comp in cal.subcomponents:
+        if comp.name not in itip.SCHEDULING_COMPONENTS:
+            continue
+        comp_attendees = comp.get("ATTENDEE", [])
+        if not isinstance(comp_attendees, list):
+            comp_attendees = [comp_attendees]
+        for a in comp_attendees:
+            delegated_from = a.params.get("DELEGATED-FROM")
+            if delegated_from is None:
+                continue
+            sources = (
+                delegated_from if isinstance(delegated_from, list) else [delegated_from]
+            )
+            if any(str(src) in own_addresses for src in sources):
+                out.add(str(a))
+    return out
 
 
 def _own_attendee_address(cal: Calendar, own_addresses: set[str]) -> str | None:
