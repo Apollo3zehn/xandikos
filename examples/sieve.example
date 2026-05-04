@@ -1,0 +1,31 @@
+# Example Sieve rule for importing iMIP calendar messages into Xandikos.
+#
+# This example uses Dovecot Pigeonhole's vnd.dovecot.pipe extension. Dovecot
+# normally only allows piping to programs in sieve_pipe_bin_dir, so install a
+# small wrapper there rather than putting the full command directly in Sieve.
+#
+# Example wrapper, e.g. /usr/lib/dovecot/sieve-pipe/xandikos-import-imip:
+#
+#   #!/bin/sh
+#   exec xandikos import-imip \
+#       --directory /var/lib/xandikos \
+#       --principal /user/
+#
+# Use --autocreate in the wrapper only if mail delivery should create the
+# principal, default calendar, and schedule inbox when they do not exist yet.
+#
+#   exec xandikos import-imip \
+#       --directory /var/lib/xandikos \
+#       --principal /user/ \
+#       --autocreate
+#
+# Sieve rule:
+
+require ["body", "copy", "vnd.dovecot.pipe"];
+
+if anyof (
+    header :contains "Content-Type" "text/calendar",
+    body :raw :contains "BEGIN:VCALENDAR"
+) {
+    pipe :copy "xandikos-import-imip";
+}

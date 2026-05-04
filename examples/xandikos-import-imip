@@ -1,0 +1,15 @@
+#!/bin/sh
+#
+# Example wrapper for Dovecot Pigeonhole's vnd.dovecot.pipe extension.
+#
+# Copy or symlink this script into Dovecot's sieve_pipe_bin_dir, then use
+# examples/sieve.example to pipe iMIP messages to it.
+
+set -eu
+
+XANDIKOS_DIRECTORY="${XANDIKOS_DIRECTORY:-/var/lib/xandikos}"
+XANDIKOS_PRINCIPAL="${XANDIKOS_PRINCIPAL:-/user/}"
+
+exec xandikos import-imip \
+    --directory "$XANDIKOS_DIRECTORY" \
+    --principal "$XANDIKOS_PRINCIPAL"
