@@ -206,16 +206,100 @@ DAV Reports
 rfc6638.txt (CalDAV scheduling extensions)
 ------------------------------------------
 
+Implemented for local delivery — see the README for the iMIP gap
+(events with remote attendees are stored but not delivered to the
+remote side over email).
+
 DAV Properties
 ^^^^^^^^^^^^^^
 
 - CALDAV:schedule-outbox-URL [supported]
 - CALDAV:schedule-inbox-URL [supported]
-- CALDAV:calendar-user-address-set [supported]
-- CALDAV:calendar-user-type [supported]
-- CALDAV:schedule-calendar-transp [supported]
-- CALDAV:schedule-default-calendar-URL [supported]
+- CALDAV:calendar-user-address-set [supported, PROPPATCH-able]
+- CALDAV:calendar-user-type [supported, PROPPATCH-able]
+- CALDAV:schedule-calendar-transp [supported, read-only]
+- CALDAV:schedule-default-calendar-URL [supported, PROPPATCH-able]
 - CALDAV:schedule-tag [supported]
+
+Resource types
+^^^^^^^^^^^^^^
+
+- CALDAV:schedule-inbox [supported]
+- CALDAV:schedule-outbox [supported]
+
+Implicit scheduling (§3.1)
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When an organiser PUTs or DELETEs a scheduling object resource in
+their own calendar, Xandikos generates the appropriate iTIP
+REQUEST/CANCEL messages and delivers them into each local attendee's
+schedule-inbox; attendee PUTs that change their PARTSTAT trigger an
+iTIP REPLY back to the organiser. Inbox deliveries are also
+auto-applied to the recipient's default calendar (REQUEST creates a
+tentative copy preserving any existing PARTSTAT; CANCEL marks the
+local copy STATUS:CANCELLED; REPLY updates the organiser's stored
+ATTENDEE PARTSTAT). Remote attendees are skipped — see the iMIP
+note above.
+
+Attendee writes are restricted per §3.1: an attendee may only modify
+their own ATTENDEE entry on a stored scheduling object; PUTs that
+touch organiser-owned fields (DTSTART, DTEND, the attendee list,
+ORGANIZER, SUMMARY, ...) are refused with the
+{caldav}attendee-allowed precondition.
+
+Each ATTENDEE on the organiser's stored event is annotated with a
+SCHEDULE-STATUS parameter recording the delivery outcome (1.2 for
+local-inbox delivery, 3.7 for unknown calendar users).
+
+Free-busy (§6)
+^^^^^^^^^^^^^^
+
+POSTing a METHOD:REQUEST VFREEBUSY to a principal's schedule-outbox
+returns a CalDAV schedule-response per attendee, with busy periods
+gathered from the principal's calendars. Calendars marked
+schedule-calendar-transp=transparent are excluded from busy time;
+events where the queried user has PARTSTAT=DECLINED are excluded;
+multi-day events are clipped to the requested time-range. VAVAILABILITY
+windows are honored per RFC 7953 priority rules.
+
+schedule-tag preconditions (§3.2.10, §8.1)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+If-Schedule-Tag-Match is honored on PUT, DELETE, MOVE, and COPY.
+The Schedule-Tag response header is emitted on PUT and GET of
+scheduling resources. The schedule-tag value tracks
+iTIP-significant changes only — bookkeeping property changes
+(DTSTAMP, LAST-MODIFIED) don't move it.
+
+SCHEDULE-FORCE-SEND (§3.2.4)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A client may attach SCHEDULE-FORCE-SEND=REQUEST or =REPLY to an
+ATTENDEE on a PUT to instruct the server to dispatch an iTIP
+message to that attendee even when no iTIP-significant change has
+happened. The parameter is consumed (stripped from the stored
+representation) and triggers the appropriate delivery: REQUEST on
+the organiser path, REPLY on the attendee path. Unrecognised values
+are silently dropped per the spec.
+
+Attendee delegation (§3.2.6)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When an attendee delegates by changing their own ATTENDEE to
+PARTSTAT=DELEGATED;DELEGATED-TO=… and adding an ATTENDEE for the
+delegate with DELEGATED-FROM pointing back at themselves, the
+server allows the addition (it would otherwise fall foul of the
+§3.1 attendee-write restriction), sends an iTIP REPLY to the
+organiser carrying the user's new PARTSTAT=DELEGATED, and sends an
+iTIP REQUEST to the new delegate so the meeting appears on their
+calendar. SCHEDULE-STATUS on the delegate ATTENDEE in the user's
+stored copy records the delivery outcome.
+
+Not implemented
+^^^^^^^^^^^^^^^
+
+- iMIP (email-based delivery of iTIP messages, RFC 6047) for
+  attendees that aren't local principals.
 
 rfc6764.txt (Locating groupware services)
 -----------------------------------------

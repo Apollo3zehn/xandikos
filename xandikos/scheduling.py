@@ -405,6 +405,21 @@ class CalendarUserTypeProperty(webdav.Property):
     async def get_value(self, href, resource, el, environ):
         el.text = resource.get_calendar_user_type()
 
+    async def set_value(self, href, resource, el):
+        if el is None:
+            resource.set_calendar_user_type(None)
+            return
+        text = (el.text or "").strip()
+        if not text:
+            resource.set_calendar_user_type(None)
+            return
+        try:
+            resource.set_calendar_user_type(text)
+        except ValueError as exc:
+            raise webdav.PreconditionFailure(
+                "{%s}valid-calendar-user-type" % caldav.NAMESPACE, str(exc)
+            ) from exc
+
 
 class ScheduleDefaultCalendarURLProperty(webdav.Property):
     """schedule-default-calendar-URL property.
@@ -420,3 +435,13 @@ class ScheduleDefaultCalendarURLProperty(webdav.Property):
         url = resource.get_schedule_default_calendar_url()
         if url is not None:
             el.append(webdav.create_href(url, href))
+
+    async def set_value(self, href, resource, el):
+        if el is None:
+            resource.set_schedule_default_calendar_url(None)
+            return
+        href_el = el.find("{DAV:}href")
+        if href_el is None or not href_el.text or not href_el.text.strip():
+            resource.set_schedule_default_calendar_url(None)
+            return
+        resource.set_schedule_default_calendar_url(href_el.text.strip())

@@ -587,19 +587,26 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
     """A schedling inbox collection."""
 
     def get_schedule_default_calendar_url(self) -> str | None:
-        """Pick a default calendar in the owning principal's calendar-home.
+        """Return the default calendar URL for incoming iTIP messages.
 
-        RFC 6638 §9.2 lets an inbox advertise a single calendar where
+        RFC 6638 §9.2: the inbox advertises a single calendar where
         clients should look (and where scheduling deliveries land) by
-        default. Without per-principal configuration we just pick the
-        first calendar resource found by walking each calendar-home
-        the principal advertises, in order. Returns ``None`` if the
-        principal has no calendars yet.
+        default. The principal can override the choice via PROPPATCH;
+        without an override we walk each calendar-home the principal
+        advertises and pick the first calendar resource we find.
+        Returns ``None`` if the principal has no calendars yet.
         """
         owning = scheduling.find_owning_principal(self.backend, self.relpath)
         if owning is None:
             return None
         principal_path, principal = owning
+
+        # Check if the principal has explicitly nominated a default.
+        try:
+            return principal.get_schedule_default_calendar_url()
+        except KeyError:
+            pass
+
         for home in principal.get_calendar_home_set():
             home_path = posixpath.join(principal_path, home)
             home_resource = self.backend.get_resource(home_path)
@@ -609,6 +616,22 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
                 if caldav.CALENDAR_RESOURCE_TYPE in member.resource_types:
                     return posixpath.join(home_path, name)
         return None
+
+    def set_schedule_default_calendar_url(self, url: str | None) -> None:
+        """Persist the default calendar choice on the owning principal.
+
+        Stored in the principal's ``.xandikos`` config; ``None``
+        unsets the override and restores the auto-pick.
+        """
+        owning = scheduling.find_owning_principal(self.backend, self.relpath)
+        if owning is None:
+            raise webdav.PreconditionFailure(
+                "{%s}valid-schedule-default-calendar-URL" % caldav.NAMESPACE,
+                "Cannot set schedule-default-calendar-URL: inbox has no "
+                "owning principal.",
+            )
+        _, principal = owning
+        principal.set_schedule_default_calendar_url(url)
 
     async def post_create_member_hook(
         self,
@@ -1118,11 +1141,39 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
         if existing is not None:
             old_cal = await _calendar_from_member(existing)
 
+        # SCHEDULE-FORCE-SEND (RFC 6638 §3.2.4) is a client-only
+        # parameter; consume it from new_cal so it doesn't end up
+        # stored. The captured addresses bypass the normal "nothing
+        # changed, skip" short-circuit and the PARTSTAT-changed gate.
+        force_request, force_reply, rewrite_needed = _consume_force_send(new_cal)
+
+        old_delegates = (
+            _delegates_of(old_cal, own_addresses) if old_cal is not None else set()
+        )
+        new_delegates = _delegates_of(new_cal, own_addresses) - old_delegates
+
         if old_cal is not None:
             new_sig = itip.extract_scheduling_signature(new_cal)
             old_sig = itip.extract_scheduling_signature(old_cal)
-            if new_sig == old_sig:
-                return None
+            if new_sig == old_sig and not (force_request or force_reply):
+                return [new_cal.to_ical()] if rewrite_needed else None
+
+            # RFC 6638 §3.1: an attendee may only modify their own
+            # ATTENDEE entry on a stored scheduling object — the rest
+            # of the event (DTSTART/DTEND, ATTENDEE list, ORGANIZER,
+            # SUMMARY, …) is owned by the organiser. If the user was
+            # an attendee on the prior version (and not also the
+            # organiser), check that they aren't reaching past their
+            # own ATTENDEE entry. Adding an ATTENDEE that's a
+            # delegate of the user (DELEGATED-FROM matching one of
+            # own_addresses) is the documented exception
+            # (RFC 6638 §3.2.6).
+            old_was_organiser, _ = _organiser_attendees(old_cal, own_addresses)
+            old_was_attendee = _own_attendee_address(old_cal, own_addresses) is not None
+            if old_was_attendee and not old_was_organiser:
+                self._reject_unauthorised_attendee_change(
+                    new_cal, old_cal, own_addresses, new_delegates
+                )
 
         is_organiser, new_attendees = _organiser_attendees(new_cal, own_addresses)
         if is_organiser:
@@ -1132,11 +1183,51 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
             if outcomes:
                 _annotate_schedule_status(new_cal, outcomes)
                 return [new_cal.to_ical()]
+            if rewrite_needed:
+                return [new_cal.to_ical()]
             return None
 
-        if old_cal is not None:
-            await self._dispatch_attendee_put(new_cal, old_cal, own_addresses)
+        outcomes = await self._dispatch_attendee_put(
+            new_cal, old_cal, own_addresses, force_reply, new_delegates
+        )
+        if outcomes:
+            _annotate_schedule_status(new_cal, outcomes)
+            return [new_cal.to_ical()]
+        if rewrite_needed:
+            return [new_cal.to_ical()]
         return None
+
+    def _reject_unauthorised_attendee_change(
+        self,
+        new_cal: Calendar,
+        old_cal: Calendar,
+        own_addresses: set[str],
+        new_delegates: set[str],
+    ) -> None:
+        """Raise if *new_cal* changes anything beyond the user's own ATTENDEE.
+
+        Compares scheduling signatures of *old_cal* and *new_cal* with
+        the user's own ATTENDEE parameters masked, and any newly-added
+        delegates skipped entirely (RFC 6638 §3.2.6 lets an attendee
+        add a delegate ATTENDEE, distinguishable by its DELEGATED-FROM
+        pointing back at the user). If anything else differs, the user
+        is touching organiser-owned data.
+        """
+        mask = frozenset(own_addresses)
+        skip = frozenset(new_delegates)
+        new_masked = itip.extract_scheduling_signature(
+            new_cal, mask_own_attendee_params=mask, skip_attendees=skip
+        )
+        old_masked = itip.extract_scheduling_signature(
+            old_cal, mask_own_attendee_params=mask, skip_attendees=skip
+        )
+        if new_masked != old_masked:
+            raise webdav.PreconditionFailure(
+                "{%s}attendee-allowed" % caldav.NAMESPACE,
+                "Attendees may only modify their own ATTENDEE entry "
+                "(or add delegates via DELEGATED-FROM); other event "
+                "properties are organiser-owned (RFC 6638 §3.1).",
+            )
 
     async def _dispatch_organiser_put(
         self,
@@ -1172,22 +1263,51 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
     async def _dispatch_attendee_put(
         self,
         new_cal: Calendar,
-        old_cal: Calendar,
+        old_cal: Calendar | None,
         own_addresses: set[str],
-    ) -> None:
+        force_reply: set[str],
+        new_delegates: set[str],
+    ) -> dict[str, str]:
+        """Send REPLY to organiser and REQUEST to any newly-added delegates.
+
+        Returns ``{address: SCHEDULE-STATUS code}`` for the delegate
+        deliveries; the REPLY itself isn't annotated (the user's own
+        ATTENDEE doesn't carry SCHEDULE-STATUS).
+        """
+        outcomes: dict[str, str] = {}
+
+        # RFC 6638 §3.2.6: when the user delegates to someone else,
+        # the new delegate needs a REQUEST so they see the meeting.
+        if new_delegates:
+            request = itip.build_itip_request(new_cal)
+            for address in new_delegates:
+                outcomes[address] = await _deliver_status(
+                    self.backend, address, request
+                )
+
         own_address = _own_attendee_address(new_cal, own_addresses)
         if own_address is None:
-            return
+            return outcomes
         organiser = _organiser_address(new_cal)
         if organiser is None or organiser in own_addresses:
             # Self-organised events have nothing to reply to.
-            return
-        if not _partstat_changed(new_cal, old_cal, own_address):
-            return
+            return outcomes
+        # REPLY semantics need a prior version to compare PARTSTAT
+        # against. On a first PUT (no prior) the only thing this path
+        # might have done is dispatch delegate REQUESTs above; nothing
+        # to REPLY to.
+        if old_cal is None:
+            return outcomes
+        # SCHEDULE-FORCE-SEND=REPLY on the user's own ATTENDEE
+        # (RFC 6638 §3.2.4) bypasses the PARTSTAT-changed gate.
+        forced = own_address in force_reply
+        if not forced and not _partstat_changed(new_cal, old_cal, own_address):
+            return outcomes
         reply = itip.build_itip_reply(new_cal, own_address)
         await scheduling.deliver_to_inbox(
             self.backend, organiser, reply, name_hint=None
         )
+        return outcomes
 
     def _owning_principal(self) -> webdav.Principal | None:
         owning = scheduling.find_owning_principal(self.backend, self.relpath)
@@ -1249,6 +1369,45 @@ def _annotate_schedule_status(cal: Calendar, outcomes: dict[str, str]) -> None:
                 a.params["SCHEDULE-STATUS"] = status
 
 
+def _consume_force_send(cal: Calendar) -> tuple[set[str], set[str], bool]:
+    """Find and strip SCHEDULE-FORCE-SEND parameters on ATTENDEE entries.
+
+    RFC 6638 §3.2.4: a client may attach ``SCHEDULE-FORCE-SEND=REQUEST``
+    or ``SCHEDULE-FORCE-SEND=REPLY`` to an ATTENDEE to instruct the
+    server to dispatch an iTIP message to that attendee even when no
+    iTIP-significant change has happened. The parameter is a request
+    to the server and is removed from the stored representation.
+
+    Returns ``(force_request, force_reply, stripped)``. The first two
+    are sets of attendee addresses by FORCE-SEND value. ``stripped``
+    is True if any SCHEDULE-FORCE-SEND parameter was removed
+    (including ones with unrecognised values, which are dropped per
+    the spec but don't trigger delivery). ``cal`` is mutated in place.
+    """
+    force_request: set[str] = set()
+    force_reply: set[str] = set()
+    stripped = False
+    for comp in cal.subcomponents:
+        if comp.name not in itip.SCHEDULING_COMPONENTS:
+            continue
+        attendees = comp.get("ATTENDEE", [])
+        if not isinstance(attendees, list):
+            attendees = [attendees]
+        for a in attendees:
+            value = a.params.get("SCHEDULE-FORCE-SEND")
+            if value is None:
+                continue
+            mode = str(value).upper()
+            del a.params["SCHEDULE-FORCE-SEND"]
+            stripped = True
+            if mode == "REQUEST":
+                force_request.add(str(a))
+            elif mode == "REPLY":
+                force_reply.add(str(a))
+            # Other values are silently ignored per RFC 6638 §3.2.4.
+    return force_request, force_reply, stripped
+
+
 def _organiser_attendees(
     cal: Calendar, organiser_addresses: set[str]
 ) -> tuple[bool, set[str]]:
@@ -1277,6 +1436,34 @@ def _organiser_attendees(
             if addr not in organiser_addresses:
                 attendees.add(addr)
     return is_organiser, attendees
+
+
+def _delegates_of(cal: Calendar, own_addresses: set[str]) -> set[str]:
+    """Return ATTENDEE addresses delegated FROM one of *own_addresses*.
+
+    RFC 5545 §3.8.4.4: an ATTENDEE may carry DELEGATED-FROM listing
+    the address(es) that delegated to them. We pick the entries
+    whose DELEGATED-FROM matches the user — those are the user's
+    delegates and the user is allowed to add them on a PUT
+    (RFC 6638 §3.2.6).
+    """
+    out: set[str] = set()
+    for comp in cal.subcomponents:
+        if comp.name not in itip.SCHEDULING_COMPONENTS:
+            continue
+        comp_attendees = comp.get("ATTENDEE", [])
+        if not isinstance(comp_attendees, list):
+            comp_attendees = [comp_attendees]
+        for a in comp_attendees:
+            delegated_from = a.params.get("DELEGATED-FROM")
+            if delegated_from is None:
+                continue
+            sources = (
+                delegated_from if isinstance(delegated_from, list) else [delegated_from]
+            )
+            if any(str(src) in own_addresses for src in sources):
+                out.add(str(a))
+    return out
 
 
 def _own_attendee_address(cal: Calendar, own_addresses: set[str]) -> str | None:
@@ -1701,8 +1888,50 @@ class Principal(webdav.Principal):
         return []
 
     def get_calendar_user_type(self):
-        # TODO(jelmer)
-        return scheduling.CALENDAR_USER_TYPE_INDIVIDUAL
+        """Return the calendar-user-type for this principal.
+
+        Reads from the principal's ``.xandikos`` config (a
+        :class:`FileBasedCollectionMetadata` instance), falling back
+        to ``INDIVIDUAL`` (RFC 6638 §2.4.2's default) when nothing is
+        configured. Set via PROPPATCH on the ``calendar-user-type``
+        property.
+        """
+        try:
+            return self._metadata().get_calendar_user_type()
+        except KeyError:
+            return scheduling.CALENDAR_USER_TYPE_INDIVIDUAL
+
+    def set_calendar_user_type(self, cutype: str | None) -> None:
+        """Persist the principal's calendar-user-type.
+
+        Delegates to :class:`FileBasedCollectionMetadata` backed by
+        the principal's ``.xandikos`` config file. ``None`` unsets
+        the key, restoring the INDIVIDUAL default.
+        """
+        if cutype is not None and cutype not in scheduling.CALENDAR_USER_TYPES:
+            raise ValueError(
+                f"calendar-user-type must be one of "
+                f"{', '.join(scheduling.CALENDAR_USER_TYPES)}, got {cutype!r}"
+            )
+        self._metadata().set_calendar_user_type(cutype)
+
+    def get_schedule_default_calendar_url(self) -> str:
+        """Return the principal-nominated default calendar URL.
+
+        Reads from the principal's ``.xandikos`` config; raises
+        :class:`KeyError` if the principal hasn't set one. The
+        scheduling inbox falls back to auto-picking when no override
+        is configured.
+        """
+        return self._metadata().get_schedule_default_calendar_url()
+
+    def set_schedule_default_calendar_url(self, url: str | None) -> None:
+        """Persist the principal's nominated default calendar URL.
+
+        Delegates to :class:`FileBasedCollectionMetadata`. ``None``
+        unsets the key and restores the inbox's auto-pick.
+        """
+        self._metadata().set_schedule_default_calendar_url(url)
 
     def get_calendar_proxy_read_for(self):
         # TODO(jelmer)

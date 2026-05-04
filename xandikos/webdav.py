@@ -276,6 +276,26 @@ async def _maybe_schedule_tag_header(resource):
         return None
 
 
+async def _check_if_schedule_tag_match(request, resource):
+    """Return a 412 Response if If-Schedule-Tag-Match doesn't match, else None.
+
+    RFC 6638 §3.2.10: PUT/DELETE (and by extension MOVE/COPY) check
+    the If-Schedule-Tag-Match header against the resource's current
+    schedule-tag. A non-matching value, or a value supplied for a
+    resource without a schedule-tag, fails the precondition.
+    """
+    if_schedule_tag_match = request.headers.get("If-Schedule-Tag-Match", None)
+    if if_schedule_tag_match is None:
+        return None
+    try:
+        current_schedule_tag = await resource.get_schedule_tag()
+    except KeyError:
+        current_schedule_tag = None
+    if not etag_matches(if_schedule_tag_match, current_schedule_tag):
+        return Response(status=412, reason="Precondition Failed")
+    return None
+
+
 def propstat_by_status(propstat):
     """Sort a list of propstatus objects by HTTP status.
 
@@ -1382,6 +1402,33 @@ class Principal(Resource):
         """
         raise NotImplementedError(self.set_calendar_user_address_set)
 
+    def set_calendar_user_type(self, cutype: str | None) -> None:
+        """Set the principal's calendar-user-type (RFC 6638 §2.4.2).
+
+        Default raises NotImplementedError so PROPPATCH on
+        calendar-user-type returns 403 on backends that haven't
+        implemented persistent storage. ``None`` removes any
+        persisted value.
+        """
+        raise NotImplementedError(self.set_calendar_user_type)
+
+    def get_schedule_default_calendar_url(self) -> str:
+        """Get the principal-nominated default calendar URL (RFC 6638 §9.2).
+
+        Returns: URL of the default calendar.
+        Raises: KeyError if not set
+        """
+        raise NotImplementedError(self.get_schedule_default_calendar_url)
+
+    def set_schedule_default_calendar_url(self, url: str | None) -> None:
+        """Set the principal-nominated default calendar URL.
+
+        Default raises NotImplementedError so PROPPATCH returns 403
+        on backends that haven't implemented persistent storage.
+        ``None`` removes any persisted value.
+        """
+        raise NotImplementedError(self.set_schedule_default_calendar_url)
+
 
 async def get_property_from_name(
     href: str, resource: Resource, properties, name: str, environ
@@ -2325,6 +2372,16 @@ class MoveMethod(Method):
                 body=[b"Source and destination cannot be the same"],
             )
 
+        # Honour If-Schedule-Tag-Match on the source resource. RFC 6638
+        # §3.2.10 doesn't mandate it for MOVE specifically, but clients
+        # that supply it expect the same precondition semantics they
+        # get for PUT/DELETE.
+        precondition_response = await _check_if_schedule_tag_match(
+            request, source_resource
+        )
+        if precondition_response is not None:
+            return precondition_response
+
         # Check if source is a collection
         is_collection = COLLECTION_RESOURCE_TYPE in source_resource.resource_types
 
@@ -2510,6 +2567,14 @@ class CopyMethod(Method):
                 reason="Forbidden",
                 body=[b"Source and destination cannot be the same"],
             )
+
+        # Honour If-Schedule-Tag-Match on the source resource
+        # (RFC 6638 §3.2.10). Same precondition semantics as PUT/DELETE.
+        precondition_response = await _check_if_schedule_tag_match(
+            request, source_resource
+        )
+        if precondition_response is not None:
+            return precondition_response
 
         # Check if source is a collection
         is_collection = COLLECTION_RESOURCE_TYPE in source_resource.resource_types

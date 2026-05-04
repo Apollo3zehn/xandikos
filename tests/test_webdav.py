@@ -163,7 +163,15 @@ class WebTests(WebTestCase):
         list(app(environ, start_response))
         return _code[0], _headers
 
-    def move(self, app, path, destination, overwrite=None, depth=None):
+    def move(
+        self,
+        app,
+        path,
+        destination,
+        overwrite=None,
+        depth=None,
+        if_schedule_tag_match=None,
+    ):
         environ = {
             "PATH_INFO": path,
             "REQUEST_METHOD": "MOVE",
@@ -174,6 +182,8 @@ class WebTests(WebTestCase):
             environ["HTTP_OVERWRITE"] = "T" if overwrite else "F"
         if depth is not None:
             environ["HTTP_DEPTH"] = depth
+        if if_schedule_tag_match is not None:
+            environ["HTTP_IF_SCHEDULE_TAG_MATCH"] = if_schedule_tag_match
         setup_testing_defaults(environ)
         # Add HTTP_HOST for proper destination parsing
         environ["HTTP_HOST"] = "localhost"
@@ -187,7 +197,15 @@ class WebTests(WebTestCase):
         contents = b"".join(app(environ, start_response))
         return _code[0], _headers, contents
 
-    def copy(self, app, path, destination, overwrite=None, depth=None):
+    def copy(
+        self,
+        app,
+        path,
+        destination,
+        overwrite=None,
+        depth=None,
+        if_schedule_tag_match=None,
+    ):
         environ = {
             "PATH_INFO": path,
             "REQUEST_METHOD": "COPY",
@@ -198,6 +216,8 @@ class WebTests(WebTestCase):
             environ["HTTP_OVERWRITE"] = "T" if overwrite else "F"
         if depth is not None:
             environ["HTTP_DEPTH"] = depth
+        if if_schedule_tag_match is not None:
+            environ["HTTP_IF_SCHEDULE_TAG_MATCH"] = if_schedule_tag_match
         setup_testing_defaults(environ)
         # Add HTTP_HOST for proper destination parsing
         environ["HTTP_HOST"] = "localhost"
@@ -976,6 +996,190 @@ class WebTests(WebTestCase):
         )
         code, _, _ = self.delete(
             app, "/collection/resource", if_schedule_tag_match='"old-sched"'
+        )
+        self.assertEqual("412 Precondition Failed", code)
+
+    def test_rfc6638_move_if_schedule_tag_match_success(self):
+        """MOVE with matching If-Schedule-Tag-Match proceeds."""
+        moved_items = []
+
+        class TestResource(Resource):
+            async def get_etag(self):
+                return '"etag-1"'
+
+            async def get_schedule_tag(self):
+                return '"sched-1"'
+
+        class TestCollection(Collection):
+            def get_member(self, name):
+                if name == "source.txt":
+                    return TestResource()
+                raise KeyError(name)
+
+            async def move_member(
+                self,
+                name,
+                destination,
+                dest_name,
+                overwrite=True,
+                remote_user=None,
+                requester=None,
+            ):
+                moved_items.append((name, dest_name))
+
+        source = TestCollection()
+        dest = TestCollection()
+        app = self.makeApp(
+            {
+                "/": source,
+                "/source.txt": TestResource(),
+                "/dest": dest,
+            },
+            [],
+        )
+        code, _, _ = self.move(
+            app,
+            "/source.txt",
+            "http://localhost/dest/target.txt",
+            if_schedule_tag_match='"sched-1"',
+        )
+        self.assertEqual("201 Created", code)
+        self.assertEqual([("source.txt", "target.txt")], moved_items)
+
+    def test_rfc6638_move_if_schedule_tag_match_fail(self):
+        """MOVE with stale If-Schedule-Tag-Match returns 412 and skips the move."""
+
+        class TestResource(Resource):
+            async def get_etag(self):
+                return '"etag-1"'
+
+            async def get_schedule_tag(self):
+                return '"sched-1"'
+
+        class TestCollection(Collection):
+            def get_member(self, name):
+                if name == "source.txt":
+                    return TestResource()
+                raise KeyError(name)
+
+            async def move_member(
+                self,
+                name,
+                destination,
+                dest_name,
+                overwrite=True,
+                remote_user=None,
+                requester=None,
+            ):
+                self.fail("move_member should not be called")  # pragma: no cover
+
+        app = self.makeApp(
+            {
+                "/": TestCollection(),
+                "/source.txt": TestResource(),
+                "/dest": TestCollection(),
+            },
+            [],
+        )
+        code, _, _ = self.move(
+            app,
+            "/source.txt",
+            "http://localhost/dest/target.txt",
+            if_schedule_tag_match='"old-sched"',
+        )
+        self.assertEqual("412 Precondition Failed", code)
+
+    def test_rfc6638_copy_if_schedule_tag_match_success(self):
+        """COPY with matching If-Schedule-Tag-Match proceeds."""
+        copied_items = []
+
+        class TestResource(Resource):
+            async def get_etag(self):
+                return '"etag-1"'
+
+            async def get_schedule_tag(self):
+                return '"sched-1"'
+
+            async def get_body(self):
+                yield b"x"
+
+            def get_content_type(self):
+                return "text/plain"
+
+        class TestCollection(Collection):
+            def get_member(self, name):
+                if name == "source.txt":
+                    return TestResource()
+                raise KeyError(name)
+
+            async def copy_member(
+                self,
+                name,
+                destination,
+                dest_name,
+                overwrite=True,
+                remote_user=None,
+                requester=None,
+            ):
+                copied_items.append((name, dest_name))
+
+        source = TestCollection()
+        dest = TestCollection()
+        app = self.makeApp(
+            {
+                "/": source,
+                "/source.txt": TestResource(),
+                "/dest": dest,
+            },
+            [],
+        )
+        code, _, _ = self.copy(
+            app,
+            "/source.txt",
+            "http://localhost/dest/target.txt",
+            if_schedule_tag_match='"sched-1"',
+        )
+        # COPY may fall through to a non-implemented path returning 501
+        # in this minimal fixture; the schedule-tag check is what we
+        # care about here. Anything other than 412 means the
+        # precondition didn't fire.
+        self.assertNotEqual("412 Precondition Failed", code)
+
+    def test_rfc6638_copy_if_schedule_tag_match_fail(self):
+        """COPY with stale If-Schedule-Tag-Match returns 412."""
+
+        class TestResource(Resource):
+            async def get_etag(self):
+                return '"etag-1"'
+
+            async def get_schedule_tag(self):
+                return '"sched-1"'
+
+            def get_content_type(self):
+                return "text/plain"
+
+        class TestCollection(Collection):
+            def get_member(self, name):
+                if name == "source.txt":
+                    return TestResource()
+                raise KeyError(name)
+
+            async def copy_member(self, *args, **kwargs):
+                self.fail("copy_member should not be called")  # pragma: no cover
+
+        app = self.makeApp(
+            {
+                "/": TestCollection(),
+                "/source.txt": TestResource(),
+                "/dest": TestCollection(),
+            },
+            [],
+        )
+        code, _, _ = self.copy(
+            app,
+            "/source.txt",
+            "http://localhost/dest/target.txt",
+            if_schedule_tag_match='"old-sched"',
         )
         self.assertEqual("412 Precondition Failed", code)
 

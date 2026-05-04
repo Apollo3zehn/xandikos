@@ -25,15 +25,34 @@ The following standards are implemented:
 - :RFC:`5689` (Extended MKCOL) - *fully implemented*
 - :RFC:`6578` (Collection Synchronization for WebDAV) - *fully implemented*
 - :RFC:`7953` (Calendar Availability) - *fully implemented*
+- :RFC:`6638` (CalDAV Scheduling Extensions) - *implemented for local
+  delivery; iMIP for remote attendees not implemented (see below)*
+- :RFC:`5546` (iCal iTIP) - *implemented for messages exchanged over
+  CalDAV scheduling; not exchanged over email (iMIP)*
 
 The following standards are not implemented:
 
-- :RFC:`6638` (CalDAV Scheduling Extensions) - *not implemented*
 - :RFC:`7809` (CalDAV Time Zone Extensions) - *not implemented*
 - :RFC:`7529` (WebDAV Quota) - *not implemented*
 - :RFC:`4709` (WebDAV Mount) - `intentionally <https://github.com/jelmer/xandikos/issues/48>`_ *not implemented*
-- :RFC:`5546` (iCal iTIP) - *not implemented*
+- :RFC:`6047` (iCalendar Message-Based Interoperability Protocol — iMIP) - *not implemented*
 - :RFC:`4324` (iCAL CAP) - *not implemented*
+
+Scheduling notes
+----------------
+
+CalDAV scheduling (RFC 6638) works end-to-end when every attendee is
+a principal on the same Xandikos server: an organiser's PUTs and
+DELETEs are turned into iTIP REQUEST/CANCEL/REPLY messages,
+delivered into the attendees' inboxes, and auto-applied to their
+default calendars; attendees' RSVPs flow back into the organiser's
+stored event. ATTENDEE entries on the organiser's stored event are
+annotated with a SCHEDULE-STATUS parameter recording the delivery
+outcome.
+
+Events with attendees on other servers are stored fine, but those
+remote attendees aren't notified — delivering iTIP over email
+(iMIP, RFC 6047) is not implemented.
 
 See `DAV compliance <notes/dav-compliance.rst>`_ for more detail on specification compliance.
 

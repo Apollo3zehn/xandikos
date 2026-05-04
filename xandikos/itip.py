@@ -109,7 +109,11 @@ def _serialize_scheduling_value(value: PropTypes) -> bytes:
     return rendered
 
 
-def extract_scheduling_signature(cal: Calendar) -> bytes:
+def extract_scheduling_signature(
+    cal: Calendar,
+    mask_own_attendee_params: "frozenset[str] | None" = None,
+    skip_attendees: "frozenset[str] | None" = None,
+) -> bytes:
     """Compute a stable signature of the scheduling-relevant content in *cal*.
 
     Two calendars with the same signature are considered equivalent for the
@@ -119,6 +123,16 @@ def extract_scheduling_signature(cal: Calendar) -> bytes:
 
     Args:
       cal: parsed icalendar Calendar object.
+      mask_own_attendee_params: if given, ATTENDEE entries whose value
+        is in this set have their parameters dropped from the signature.
+        Used by the attendee-write check (RFC 6638 §3.1) to ignore the
+        user's own PARTSTAT/COMMENT/RSVP changes when deciding whether
+        the rest of the event has been touched.
+      skip_attendees: if given, ATTENDEE entries whose value is in this
+        set are dropped from the signature entirely (presence as well
+        as params). Used by the attendee-write check to allow adding
+        delegates: an attendee may add an ATTENDEE entry whose
+        DELEGATED-FROM matches their own address (RFC 6638 §3.2.6).
 
     Returns: opaque ``bytes`` value suitable for hashing or direct comparison.
     """
@@ -144,7 +158,16 @@ def extract_scheduling_signature(cal: Calendar) -> bytes:
             value = component.get(field)
             if value is None:
                 continue
-            if isinstance(value, list):
+            if field.upper() == "ATTENDEE":
+                values = value if isinstance(value, list) else [value]
+                items = [
+                    _serialize_attendee_value(v, mask_own_attendee_params)
+                    for v in values
+                    if skip_attendees is None or str(v) not in skip_attendees
+                ]
+                if not items:
+                    continue
+            elif isinstance(value, list):
                 items = [_serialize_scheduling_value(v) for v in value]
             else:
                 items = [_serialize_scheduling_value(value)]
@@ -170,6 +193,20 @@ def extract_scheduling_signature(cal: Calendar) -> bytes:
                 h.update(item)
                 h.update(b"\x00")
     return h.digest()
+
+
+def _serialize_attendee_value(
+    value: PropTypes, mask_own: "frozenset[str] | None"
+) -> bytes:
+    """Like _serialize_scheduling_value but drops params when masked.
+
+    Used by extract_scheduling_signature to ignore the user's own
+    PARTSTAT/RSVP/etc. when checking whether anything *else* has
+    changed.
+    """
+    if mask_own is not None and str(value) in mask_own:
+        return value.to_ical()
+    return _serialize_scheduling_value(value)
 
 
 def build_itip_cancel(cal: Component) -> Calendar:

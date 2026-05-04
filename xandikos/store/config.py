@@ -130,6 +130,39 @@ class CollectionMetadata:
         """
         raise NotImplementedError(self.set_calendar_user_address_set)
 
+    def get_calendar_user_type(self) -> str:
+        """Get the calendar-user-type (RFC 6638 §2.4.2).
+
+        Returns: one of INDIVIDUAL, GROUP, RESOURCE, ROOM, UNKNOWN.
+        Raises: KeyError if not set
+        """
+        raise NotImplementedError(self.get_calendar_user_type)
+
+    def set_calendar_user_type(self, cutype: str | None) -> None:
+        """Set the calendar-user-type.
+
+        Args:
+            cutype: one of INDIVIDUAL/GROUP/RESOURCE/ROOM/UNKNOWN, or
+                None to unset.
+        """
+        raise NotImplementedError(self.set_calendar_user_type)
+
+    def get_schedule_default_calendar_url(self) -> str:
+        """Get the schedule-default-calendar-URL (RFC 6638 §9.2).
+
+        Returns: URL of the default calendar for incoming iTIP messages.
+        Raises: KeyError if not set
+        """
+        raise NotImplementedError(self.get_schedule_default_calendar_url)
+
+    def set_schedule_default_calendar_url(self, url: str | None) -> None:
+        """Set the schedule-default-calendar-URL.
+
+        Args:
+            url: URL of the default calendar, or None to unset.
+        """
+        raise NotImplementedError(self.set_schedule_default_calendar_url)
+
 
 class FileBasedCollectionMetadata(CollectionMetadata):
     """Metadata for a configuration."""
@@ -242,6 +275,20 @@ class FileBasedCollectionMetadata(CollectionMetadata):
             del self._configparser["DEFAULT"]["timezone"]
         self._save("Set timezone.")
 
+    def _set_scheduling_option(self, key: str, value: str | None, message: str) -> None:
+        if value is not None:
+            if not self._configparser.has_section("scheduling"):
+                self._configparser.add_section("scheduling")
+            self._configparser.set("scheduling", key, value)
+        else:
+            if self._configparser.has_option("scheduling", key):
+                self._configparser.remove_option("scheduling", key)
+            if self._configparser.has_section(
+                "scheduling"
+            ) and not self._configparser.options("scheduling"):
+                self._configparser.remove_section("scheduling")
+        self._save(message)
+
     def get_calendar_user_address_set(self):
         if not self._configparser.has_option("scheduling", "addresses"):
             raise KeyError
@@ -249,15 +296,25 @@ class FileBasedCollectionMetadata(CollectionMetadata):
         return [a.strip() for a in raw.split(",") if a.strip()]
 
     def set_calendar_user_address_set(self, addresses):
-        if addresses:
-            if not self._configparser.has_section("scheduling"):
-                self._configparser.add_section("scheduling")
-            self._configparser.set("scheduling", "addresses", ", ".join(addresses))
-        else:
-            if self._configparser.has_option("scheduling", "addresses"):
-                self._configparser.remove_option("scheduling", "addresses")
-            if self._configparser.has_section(
-                "scheduling"
-            ) and not self._configparser.options("scheduling"):
-                self._configparser.remove_section("scheduling")
-        self._save("Set calendar-user-address-set.")
+        joined = ", ".join(addresses) if addresses else None
+        self._set_scheduling_option(
+            "addresses", joined, "Set calendar-user-address-set."
+        )
+
+    def get_calendar_user_type(self):
+        if not self._configparser.has_option("scheduling", "user-type"):
+            raise KeyError
+        return self._configparser.get("scheduling", "user-type")
+
+    def set_calendar_user_type(self, cutype):
+        self._set_scheduling_option("user-type", cutype, "Set calendar-user-type.")
+
+    def get_schedule_default_calendar_url(self):
+        if not self._configparser.has_option("scheduling", "default-calendar-url"):
+            raise KeyError
+        return self._configparser.get("scheduling", "default-calendar-url")
+
+    def set_schedule_default_calendar_url(self, url):
+        self._set_scheduling_option(
+            "default-calendar-url", url, "Set schedule-default-calendar-URL."
+        )
