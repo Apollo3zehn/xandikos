@@ -24,6 +24,7 @@ import asyncio
 import logging
 import posixpath
 import sys
+from urllib.parse import urlparse
 from . import __version__
 from .store import STORE_TYPE_CALENDAR, STORE_TYPE_ADDRESSBOOK
 
@@ -80,12 +81,17 @@ def add_create_collection_parser(parser):
 
 def add_import_imip_parser(parser):
     """Add arguments for the import-imip subcommand."""
-    parser.add_argument(
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument(
         "-d",
         "--directory",
         type=str,
-        required=True,
         help="Root directory containing collections",
+    )
+    target.add_argument(
+        "--server-url",
+        type=str,
+        help="Schedule inbox URL to POST the extracted iTIP text/calendar data to.",
     )
     parser.add_argument(
         "--principal",
@@ -97,6 +103,16 @@ def add_import_imip_parser(parser):
         "--autocreate",
         action="store_true",
         help="Create the principal, default calendar, and schedule inbox if missing.",
+    )
+    parser.add_argument(
+        "--username",
+        type=str,
+        help="Username for HTTP Basic authentication with --server-url.",
+    )
+    parser.add_argument(
+        "--password-file",
+        type=str,
+        help="File containing the HTTP Basic authentication password.",
     )
 
 
@@ -135,7 +151,25 @@ async def create_collection_main(args, parser):
 
 async def import_imip_main(args, parser, data: bytes | None = None):
     """Import a raw iMIP email message into a principal's schedule inbox."""
-    from . import imip, web
+    from . import imip
+
+    logger = logging.getLogger(__name__)
+
+    if data is None:
+        data = sys.stdin.buffer.read()
+    try:
+        payload = imip.extract_payload_from_bytes(data)
+    except imip.InvalidIMIPMessage as exc:
+        logger.error("Invalid iMIP message: %s", exc)
+        return 1
+
+    if args.server_url:
+        return await _import_imip_to_server(args, payload)
+    return await _import_imip_to_directory(args, payload)
+
+
+async def _import_imip_to_directory(args, payload) -> int:
+    from . import web
 
     logger = logging.getLogger(__name__)
 
@@ -155,14 +189,6 @@ async def import_imip_main(args, parser, data: bytes | None = None):
 
     if not isinstance(principal, web.Principal):
         logger.error("%s is not a principal.", principal_path)
-        return 1
-
-    if data is None:
-        data = sys.stdin.buffer.read()
-    try:
-        payload = imip.extract_payload_from_bytes(data)
-    except imip.InvalidIMIPMessage as exc:
-        logger.error("Invalid iMIP message: %s", exc)
         return 1
 
     inbox_path = posixpath.join(principal_path, principal.get_schedule_inbox_url())
@@ -195,6 +221,62 @@ async def import_imip_main(args, parser, data: bytes | None = None):
         name,
     )
     return 0
+
+
+async def _import_imip_to_server(args, payload) -> int:
+    logger = logging.getLogger(__name__)
+
+    try:
+        await _post_itip_to_server(
+            args.server_url,
+            payload.calendar_data,
+            username=args.username,
+            password=_read_password_file(args.password_file),
+        )
+    except Exception as exc:
+        logger.error("Unable to POST iTIP message to %s: %s", args.server_url, exc)
+        return 1
+
+    logger.info("Posted iMIP %s message to %s.", payload.method, args.server_url)
+    return 0
+
+
+async def _post_itip_to_server(
+    server_url: str,
+    calendar_data: bytes,
+    *,
+    username: str | None = None,
+    password: str | None = None,
+) -> None:
+    import aiohttp
+
+    parsed = urlparse(server_url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("server URL must use http or https")
+
+    auth = None
+    if username is not None:
+        auth = aiohttp.BasicAuth(username, password or "")
+    async with aiohttp.ClientSession(auth=auth) as session:
+        async with session.post(
+            server_url,
+            data=calendar_data,
+            headers={"Content-Type": "text/calendar"},
+        ) as response:
+            if 200 <= response.status < 300:
+                return
+            body = await response.text()
+            raise RuntimeError(
+                "server returned HTTP %d %s: %s"
+                % (response.status, response.reason, body.strip())
+            )
+
+
+def _read_password_file(path: str | None) -> str | None:
+    if path is None:
+        return None
+    with open(path) as f:
+        return f.read().strip()
 
 
 def _normalise_principal_path(path: str) -> str:

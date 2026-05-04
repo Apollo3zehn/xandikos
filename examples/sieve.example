@@ -8,16 +8,18 @@
 #
 #   #!/bin/sh
 #   exec xandikos import-imip \
-#       --directory /var/lib/xandikos \
-#       --principal /user/
+#       --server-url http://localhost:8080/user/inbox/
 #
-# Use --autocreate in the wrapper only if mail delivery should create the
-# principal, default calendar, and schedule inbox when they do not exist yet.
+# For authenticated servers, keep the password file readable only by the
+# delivery user and use:
 #
 #   exec xandikos import-imip \
-#       --directory /var/lib/xandikos \
-#       --principal /user/ \
-#       --autocreate
+#       --server-url https://dav.example.net/user/inbox/ \
+#       --username bob \
+#       --password-file /run/secrets/xandikos-password
+#
+# A direct filesystem mode still exists for offline imports, but HTTP keeps
+# locking, auth, and storage behavior inside the running Xandikos server.
 #
 # Sieve rule:
 

@@ -7,9 +7,7 @@
 
 set -eu
 
-XANDIKOS_DIRECTORY="${XANDIKOS_DIRECTORY:-/var/lib/xandikos}"
-XANDIKOS_PRINCIPAL="${XANDIKOS_PRINCIPAL:-/user/}"
+XANDIKOS_SERVER_URL="${XANDIKOS_SERVER_URL:-http://localhost:8080/user/inbox/}"
 
 exec xandikos import-imip \
-    --directory "$XANDIKOS_DIRECTORY" \
-    --principal "$XANDIKOS_PRINCIPAL"
+    --server-url "$XANDIKOS_SERVER_URL"

@@ -235,8 +235,11 @@ class ImportIMIPTests(unittest.TestCase):
 
         values = {
             "directory": self.test_dir,
+            "server_url": None,
             "principal": "/user/",
             "autocreate": False,
+            "username": None,
+            "password_file": None,
         }
         values.update(kwargs)
         return argparse.Namespace(**values)
@@ -259,8 +262,24 @@ class ImportIMIPTests(unittest.TestCase):
 
         args = parser.parse_args(["-d", "/test/dir", "--principal", "/alice/"])
         self.assertEqual("/test/dir", args.directory)
+        self.assertIsNone(args.server_url)
         self.assertEqual("/alice/", args.principal)
         self.assertFalse(args.autocreate)
+
+        args = parser.parse_args(
+            [
+                "--server-url",
+                "https://dav.example/user/inbox/",
+                "--username",
+                "bob",
+                "--password-file",
+                "/run/secrets/xandikos-password",
+            ]
+        )
+        self.assertIsNone(args.directory)
+        self.assertEqual("https://dav.example/user/inbox/", args.server_url)
+        self.assertEqual("bob", args.username)
+        self.assertEqual("/run/secrets/xandikos-password", args.password_file)
 
     def test_import_imip_autocreates_and_applies_request(self):
         result = asyncio.run(
@@ -303,6 +322,58 @@ class ImportIMIPTests(unittest.TestCase):
                     data=b"Subject: nope\r\n\r\nhello",
                 )
             )
+
+        self.assertEqual(1, result)
+
+    def test_import_imip_posts_extracted_itip_to_server(self):
+        captured = {}
+
+        async def post_itip_to_server(url, calendar_data, *, username, password):
+            captured["url"] = url
+            captured["calendar_data"] = calendar_data
+            captured["username"] = username
+            captured["password"] = password
+
+        password_file = os.path.join(self.test_dir, "password")
+        with open(password_file, "w") as f:
+            f.write("secret\n")
+
+        with patch("xandikos.__main__._post_itip_to_server", post_itip_to_server):
+            result = asyncio.run(
+                import_imip_main(
+                    self._args(
+                        directory=None,
+                        server_url="https://dav.example/user/inbox/",
+                        username="bob",
+                        password_file=password_file,
+                    ),
+                    None,
+                    data=_imip_message(),
+                )
+            )
+
+        self.assertEqual(0, result)
+        self.assertEqual("https://dav.example/user/inbox/", captured["url"])
+        self.assertIn(b"METHOD:REQUEST", captured["calendar_data"])
+        self.assertEqual("bob", captured["username"])
+        self.assertEqual("secret", captured["password"])
+
+    def test_import_imip_reports_server_post_failure(self):
+        async def post_itip_to_server(url, calendar_data, *, username, password):
+            raise RuntimeError("boom")
+
+        with patch("xandikos.__main__._post_itip_to_server", post_itip_to_server):
+            with self.assertLogs("xandikos.__main__", level=logging.ERROR):
+                result = asyncio.run(
+                    import_imip_main(
+                        self._args(
+                            directory=None,
+                            server_url="https://dav.example/user/inbox/",
+                        ),
+                        None,
+                        data=_imip_message(),
+                    )
+                )
 
         self.assertEqual(1, result)
 
@@ -408,6 +479,8 @@ class MainCommandTests(unittest.TestCase):
         help_output = captured_output.getvalue()
         self.assertIn("--principal", help_output)
         self.assertIn("--autocreate", help_output)
+        self.assertIn("--server-url", help_output)
+        self.assertIn("--password-file", help_output)
 
     def test_main_help_subcommand(self):
         """Test that 'help' subcommand prints usage and returns 0."""
