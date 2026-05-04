@@ -75,7 +75,7 @@ def extract_payload(message: Message) -> IMIPPayload:
 
     calendar_data = _part_payload_bytes(part)
     try:
-        calendar = Calendar.from_ical(calendar_data)
+        calendar = Calendar.from_ical(calendar_data.decode('utf-8'))
     except ValueError as exc:
         raise InvalidIMIPMessage(f"Invalid iCalendar payload: {exc}") from exc
     if not isinstance(calendar, Calendar):
@@ -84,6 +84,7 @@ def extract_payload(message: Message) -> IMIPPayload:
     calendar_method = _calendar_method(calendar)
     mime_method = part.get_param("method", header="content-type")
     if mime_method is not None:
+        assert isinstance(mime_method, str)
         mime_method = mime_method.upper()
         if calendar_method != mime_method:
             raise InvalidIMIPMessage(
@@ -136,7 +137,9 @@ def target_calendar_user_addresses(payload: IMIPPayload) -> set[str]:
     return targets
 
 
-def candidate_calendar_user_addresses(message: Message, payload: IMIPPayload) -> set[str]:
+def candidate_calendar_user_addresses(
+    message: Message, payload: IMIPPayload
+) -> set[str]:
     """Return all plausible local calendar-user addresses for inbound routing."""
     addresses = calendar_user_addresses_from_message(message)
     addresses.update(target_calendar_user_addresses(payload))
@@ -192,6 +195,7 @@ def _find_calendar_part(message: Message) -> Message | None:
 def _part_payload_bytes(part: Message) -> bytes:
     payload = part.get_payload(decode=True)
     if payload is not None:
+        assert isinstance(payload, bytes)
         return payload
     raw = part.get_payload()
     if isinstance(raw, str):

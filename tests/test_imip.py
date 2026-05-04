@@ -177,7 +177,9 @@ class BuildMessageTests(unittest.TestCase):
         self.assertIn("Calendar request: Sync", msg["Subject"])
 
     def test_build_message_requires_supported_method(self):
-        calendar = Calendar.from_ical(REQUEST.replace(b"METHOD:REQUEST", b"METHOD:PUBLISH"))
+        calendar = Calendar.from_ical(
+            REQUEST.replace(b"METHOD:REQUEST", b"METHOD:PUBLISH")
+        )
 
         with self.assertRaises(imip.InvalidIMIPMessage):
             imip.build_message(calendar, "alice@example.com", "bob@example.com")
