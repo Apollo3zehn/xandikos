@@ -25,9 +25,16 @@ import os
 import shutil
 import tempfile
 import unittest
+from email.message import EmailMessage
 from unittest.mock import patch
 
-from xandikos.__main__ import add_create_collection_parser, create_collection_main, main
+from xandikos.__main__ import (
+    add_create_collection_parser,
+    add_import_imip_parser,
+    create_collection_main,
+    import_imip_main,
+    main,
+)
 from xandikos.store import STORE_TYPE_ADDRESSBOOK, STORE_TYPE_CALENDAR
 from xandikos.web import SingleUserFilesystemBackend
 
@@ -186,6 +193,120 @@ class CreateCollectionTests(unittest.TestCase):
         self.assertEqual(resource.store.get_type(), STORE_TYPE_CALENDAR)
 
 
+REQUEST = b"""\
+BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//Test//EN\r
+METHOD:REQUEST\r
+BEGIN:VEVENT\r
+UID:imip-request@example.com\r
+DTSTAMP:20260101T000000Z\r
+DTSTART:20260601T100000Z\r
+DTEND:20260601T110000Z\r
+SUMMARY:Imported invite\r
+ORGANIZER:mailto:alice@example.com\r
+ATTENDEE:mailto:bob@example.com\r
+END:VEVENT\r
+END:VCALENDAR\r
+"""
+
+
+def _imip_message(calendar_data=REQUEST, method="REQUEST"):
+    msg = EmailMessage()
+    msg["From"] = "Alice <alice@example.com>"
+    msg["To"] = "Bob <bob@example.com>"
+    msg.set_content(
+        calendar_data.decode("utf-8"),
+        subtype="calendar",
+        charset="utf-8",
+        params={"method": method},
+    )
+    return msg.as_bytes()
+
+
+class ImportIMIPTests(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.test_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.test_dir)
+
+    def _args(self, **kwargs):
+        import argparse
+
+        values = {
+            "directory": self.test_dir,
+            "principal": "/user/",
+            "autocreate": False,
+        }
+        values.update(kwargs)
+        return argparse.Namespace(**values)
+
+    def test_add_import_imip_parser(self):
+        import argparse
+        import sys
+        from io import StringIO
+
+        parser = argparse.ArgumentParser()
+        add_import_imip_parser(parser)
+
+        old_stderr = sys.stderr
+        sys.stderr = StringIO()
+        try:
+            with self.assertRaises(SystemExit):
+                parser.parse_args([])
+        finally:
+            sys.stderr = old_stderr
+
+        args = parser.parse_args(["-d", "/test/dir", "--principal", "/alice/"])
+        self.assertEqual("/test/dir", args.directory)
+        self.assertEqual("/alice/", args.principal)
+        self.assertFalse(args.autocreate)
+
+    def test_import_imip_autocreates_and_applies_request(self):
+        result = asyncio.run(
+            import_imip_main(
+                self._args(autocreate=True),
+                None,
+                data=_imip_message(),
+            )
+        )
+
+        self.assertEqual(0, result)
+        backend = SingleUserFilesystemBackend(self.test_dir)
+        backend._mark_as_principal("/user")
+        inbox = backend.get_resource("/user/inbox")
+        calendar = backend.get_resource("/user/calendars/calendar")
+
+        self.assertEqual(1, len(list(inbox.members())))
+        calendar_members = list(calendar.members())
+        self.assertEqual(1, len(calendar_members))
+        name, member = calendar_members[0]
+        file = calendar.store.get_file(name, member.get_content_type(), member.etag)
+        body = b"".join(file.content)
+        self.assertIn(b"UID:imip-request@example.com", body)
+        self.assertNotIn(b"METHOD:REQUEST", body)
+
+    def test_import_imip_requires_existing_principal_without_autocreate(self):
+        with self.assertLogs("xandikos.__main__", level=logging.ERROR):
+            result = asyncio.run(
+                import_imip_main(self._args(), None, data=_imip_message())
+            )
+
+        self.assertEqual(1, result)
+
+    def test_import_imip_rejects_invalid_message(self):
+        with self.assertLogs("xandikos.__main__", level=logging.ERROR):
+            result = asyncio.run(
+                import_imip_main(
+                    self._args(autocreate=True),
+                    None,
+                    data=b"Subject: nope\r\n\r\nhello",
+                )
+            )
+
+        self.assertEqual(1, result)
+
+
 class MainCommandTests(unittest.TestCase):
     def test_main_create_collection_subcommand(self):
         """Test that the main function recognizes create-collection subcommand."""
@@ -226,6 +347,7 @@ class MainCommandTests(unittest.TestCase):
         # Check that help was printed and includes create-collection
         help_output = captured_output.getvalue()
         self.assertIn("create-collection", help_output)
+        self.assertIn("import-imip", help_output)
 
     def test_main_invalid_subcommand(self):
         """Test handling of invalid subcommands."""
@@ -268,6 +390,25 @@ class MainCommandTests(unittest.TestCase):
         self.assertIn("--name", help_output)
         self.assertIn("--displayname", help_output)
 
+    def test_main_import_imip_help(self):
+        """Test import-imip subcommand help."""
+        import sys
+        from io import StringIO
+
+        old_stdout = sys.stdout
+        captured_output = StringIO()
+        sys.stdout = captured_output
+
+        try:
+            with self.assertRaises(SystemExit):
+                asyncio.run(main(["import-imip", "--help"]))
+        finally:
+            sys.stdout = old_stdout
+
+        help_output = captured_output.getvalue()
+        self.assertIn("--principal", help_output)
+        self.assertIn("--autocreate", help_output)
+
     def test_main_help_subcommand(self):
         """Test that 'help' subcommand prints usage and returns 0."""
         import sys
@@ -287,4 +428,5 @@ class MainCommandTests(unittest.TestCase):
         # Should list all subcommands
         self.assertIn("serve", help_output)
         self.assertIn("create-collection", help_output)
+        self.assertIn("import-imip", help_output)
         self.assertIn("help", help_output)

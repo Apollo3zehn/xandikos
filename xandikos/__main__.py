@@ -22,6 +22,7 @@
 import argparse
 import asyncio
 import logging
+import posixpath
 import sys
 from . import __version__
 from .store import STORE_TYPE_CALENDAR, STORE_TYPE_ADDRESSBOOK
@@ -77,6 +78,28 @@ def add_create_collection_parser(parser):
     )
 
 
+def add_import_imip_parser(parser):
+    """Add arguments for the import-imip subcommand."""
+    parser.add_argument(
+        "-d",
+        "--directory",
+        type=str,
+        required=True,
+        help="Root directory containing collections",
+    )
+    parser.add_argument(
+        "--principal",
+        type=str,
+        default="/user/",
+        help="Principal path whose schedule inbox should receive the message. [%(default)s]",
+    )
+    parser.add_argument(
+        "--autocreate",
+        action="store_true",
+        help="Create the principal, default calendar, and schedule inbox if missing.",
+    )
+
+
 async def create_collection_main(args, parser):
     """Main function for the create-collection subcommand."""
     from .web import SingleUserFilesystemBackend
@@ -110,6 +133,76 @@ async def create_collection_main(args, parser):
     return 0
 
 
+async def import_imip_main(args, parser, data: bytes | None = None):
+    """Import a raw iMIP email message into a principal's schedule inbox."""
+    from . import imip, web
+
+    logger = logging.getLogger(__name__)
+
+    principal_path = _normalise_principal_path(args.principal)
+    backend = web.SingleUserFilesystemBackend(args.directory)
+    backend._mark_as_principal(principal_path)
+    principal = backend.get_resource(principal_path)
+    if principal is None:
+        if not args.autocreate:
+            logger.error(
+                "Principal %s does not exist; pass --autocreate to create it.",
+                principal_path,
+            )
+            return 1
+        backend.create_principal(principal_path, create_defaults=True)
+        principal = backend.get_resource(principal_path)
+
+    if not isinstance(principal, web.Principal):
+        logger.error("%s is not a principal.", principal_path)
+        return 1
+
+    if data is None:
+        data = sys.stdin.buffer.read()
+    try:
+        payload = imip.extract_payload_from_bytes(data)
+    except imip.InvalidIMIPMessage as exc:
+        logger.error("Invalid iMIP message: %s", exc)
+        return 1
+
+    inbox_path = posixpath.join(principal_path, principal.get_schedule_inbox_url())
+    inbox = backend.get_resource(inbox_path)
+    if not isinstance(inbox, web.ScheduleInbox) and args.autocreate:
+        web.create_principal_defaults(backend, principal)
+        inbox = backend.get_resource(inbox_path)
+    if not isinstance(inbox, web.ScheduleInbox):
+        logger.error(
+            "%s is not a schedule inbox; pass --autocreate or create defaults first.",
+            inbox_path,
+        )
+        return 1
+
+    try:
+        name, _etag = await inbox.create_member(
+            None,
+            [payload.calendar_data],
+            "text/calendar",
+            requester="xandikos import-imip",
+        )
+    except Exception as exc:
+        logger.error("Unable to import iMIP message: %s", exc)
+        return 1
+
+    logger.info(
+        "Imported iMIP %s message into %s/%s.",
+        payload.method,
+        inbox_path.rstrip("/"),
+        name,
+    )
+    return 0
+
+
+def _normalise_principal_path(path: str) -> str:
+    if not path.startswith("/"):
+        path = "/" + path
+    return posixpath.normpath(path)
+
+
 async def main(argv):
     # For now, just invoke xandikos.web
     from . import web
@@ -134,6 +227,12 @@ async def main(argv):
     )
     add_create_collection_parser(create_parser)
 
+    import_imip_parser = subparsers.add_parser(
+        "import-imip",
+        help="Import an iMIP email message from stdin into a schedule inbox",
+    )
+    add_import_imip_parser(import_imip_parser)
+
     multi_user_parser = subparsers.add_parser(
         "multi-user",
         usage="%(prog)s -d ROOT-DIR [OPTIONS]",
@@ -151,6 +250,9 @@ async def main(argv):
         # Configure logging for create-collection subcommand
         logging.basicConfig(level=logging.INFO, format="%(message)s")
         return await create_collection_main(args, parser)
+    elif args.subcommand == "import-imip":
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+        return await import_imip_main(args, parser)
     elif args.subcommand == "help":
         parser.print_help()
         return 0
