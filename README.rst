@@ -59,7 +59,7 @@ See `DAV compliance <notes/dav-compliance.rst>`_ for more detail on specificatio
 Limitations
 -----------
 
-- No multi-user support
+- Multi-user support is experimental.
 
 Supported clients
 =================
