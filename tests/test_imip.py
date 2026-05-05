@@ -184,6 +184,41 @@ class BuildMessageTests(unittest.TestCase):
         with self.assertRaises(imip.InvalidIMIPMessage):
             imip.build_message(calendar, "alice@example.com", "bob@example.com")
 
+    def test_build_message_reply_to_and_auto_submitted(self):
+        calendar = Calendar.from_ical(REQUEST)
+        msg = imip.build_message(
+            calendar,
+            "calendar@server.example",
+            "bob@example.com",
+            reply_to="alice@example.com",
+            auto_submitted="auto-generated",
+        )
+
+        self.assertEqual("calendar@server.example", msg["From"])
+        self.assertEqual("alice@example.com", msg["Reply-To"])
+        self.assertEqual("auto-generated", msg["Auto-Submitted"])
+
+
+class IsAutoSubmittedTests(unittest.TestCase):
+    def test_no_header(self):
+        msg = EmailMessage()
+        self.assertFalse(imip.is_auto_submitted(msg))
+
+    def test_no_keyword(self):
+        msg = EmailMessage()
+        msg["Auto-Submitted"] = "no"
+        self.assertFalse(imip.is_auto_submitted(msg))
+
+    def test_auto_generated(self):
+        msg = EmailMessage()
+        msg["Auto-Submitted"] = "auto-generated"
+        self.assertTrue(imip.is_auto_submitted(msg))
+
+    def test_auto_replied_with_parameters(self):
+        msg = EmailMessage()
+        msg["Auto-Submitted"] = "auto-replied; type=vacation"
+        self.assertTrue(imip.is_auto_submitted(msg))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -83,7 +83,21 @@ async def main(args, parser, data: bytes | None = None):
         data = sys.stdin.buffer.read()
     assert isinstance(data, bytes)
     try:
-        payload = imip.extract_payload_from_bytes(data)
+        message = imip.parse_message(data)
+    except imip.InvalidIMIPMessage as exc:
+        logger.error("Invalid iMIP message: %s", exc)
+        return 1
+    if imip.is_auto_submitted(message):
+        # RFC 3834: don't bounce server-generated iTIP back into the
+        # mailbox it came from. Returns 0 because the Sieve hook
+        # treated this message correctly by handing it to us.
+        logger.info(
+            "Skipping auto-submitted message (Auto-Submitted: %s)",
+            message.get("Auto-Submitted"),
+        )
+        return 0
+    try:
+        payload = imip.extract_payload(message)
     except imip.InvalidIMIPMessage as exc:
         logger.error("Invalid iMIP message: %s", exc)
         return 1
