@@ -198,6 +198,31 @@ class BuildMessageTests(unittest.TestCase):
         self.assertEqual("alice@example.com", msg["Reply-To"])
         self.assertEqual("auto-generated", msg["Auto-Submitted"])
 
+    def test_round_trip_through_extract_payload(self):
+        # build_message → bytes → parse_message → extract_payload
+        # round-trip preserves the iCalendar content and all the
+        # routing-relevant headers. Catches MIME-parameter or charset
+        # drift between the writer and the reader.
+        original = Calendar.from_ical(REQUEST)
+        msg = imip.build_message(
+            original,
+            "calendar@server.example",
+            "bob@example.com",
+            reply_to="alice@example.com",
+            auto_submitted="auto-generated",
+        )
+        wire = msg.as_bytes()
+
+        parsed = imip.parse_message(wire)
+        self.assertEqual("calendar@server.example", parsed["From"])
+        self.assertEqual("bob@example.com", parsed["To"])
+        self.assertEqual("alice@example.com", parsed["Reply-To"])
+        self.assertEqual("auto-generated", parsed["Auto-Submitted"])
+
+        payload = imip.extract_payload(parsed)
+        self.assertEqual("REQUEST", payload.method)
+        self.assertEqual(original.to_ical(), payload.calendar.to_ical())
+
 
 class IsAutoSubmittedTests(unittest.TestCase):
     def test_no_header(self):
