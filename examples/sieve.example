@@ -1,0 +1,33 @@
+# Example Sieve rule for importing iMIP calendar messages into Xandikos.
+#
+# This example uses Dovecot Pigeonhole's vnd.dovecot.pipe extension. Dovecot
+# normally only allows piping to programs in sieve_pipe_bin_dir, so install a
+# small wrapper there rather than putting the full command directly in Sieve.
+#
+# Example wrapper, e.g. /usr/lib/dovecot/sieve-pipe/xandikos-import-imip:
+#
+#   #!/bin/sh
+#   exec xandikos import-imip \
+#       --server-url http://localhost:8080/user/inbox/
+#
+# For authenticated servers, keep the password file readable only by the
+# delivery user and use:
+#
+#   exec xandikos import-imip \
+#       --server-url https://dav.example.net/user/inbox/ \
+#       --username bob \
+#       --password-file /run/secrets/xandikos-password
+#
+# A direct filesystem mode still exists for offline imports, but HTTP keeps
+# locking, auth, and storage behavior inside the running Xandikos server.
+#
+# Sieve rule:
+
+require ["body", "copy", "vnd.dovecot.pipe"];
+
+if anyof (
+    header :contains "Content-Type" "text/calendar",
+    body :raw :contains "BEGIN:VCALENDAR"
+) {
+    pipe :copy "xandikos-import-imip";
+}

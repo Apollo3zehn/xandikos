@@ -25,9 +25,15 @@ import os
 import shutil
 import tempfile
 import unittest
+from email.message import EmailMessage
 from unittest.mock import patch
 
-from xandikos.__main__ import add_create_collection_parser, create_collection_main, main
+from xandikos.__main__ import (
+    add_create_collection_parser,
+    create_collection_main,
+    main,
+)
+from xandikos import import_imip
 from xandikos.store import STORE_TYPE_ADDRESSBOOK, STORE_TYPE_CALENDAR
 from xandikos.web import SingleUserFilesystemBackend
 
@@ -186,6 +192,260 @@ class CreateCollectionTests(unittest.TestCase):
         self.assertEqual(resource.store.get_type(), STORE_TYPE_CALENDAR)
 
 
+REQUEST = b"""\
+BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//Test//EN\r
+METHOD:REQUEST\r
+BEGIN:VEVENT\r
+UID:imip-request@example.com\r
+DTSTAMP:20260101T000000Z\r
+DTSTART:20260601T100000Z\r
+DTEND:20260601T110000Z\r
+SUMMARY:Imported invite\r
+ORGANIZER:mailto:alice@example.com\r
+ATTENDEE:mailto:bob@example.com\r
+END:VEVENT\r
+END:VCALENDAR\r
+"""
+
+
+def _imip_message(calendar_data=REQUEST, method="REQUEST"):
+    msg = EmailMessage()
+    msg["From"] = "Alice <alice@example.com>"
+    msg["To"] = "Bob <bob@example.com>"
+    msg.set_content(
+        calendar_data.decode("utf-8"),
+        subtype="calendar",
+        charset="utf-8",
+        params={"method": method},
+    )
+    return msg.as_bytes()
+
+
+class ImportIMIPTests(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.test_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.test_dir)
+
+    def _args(self, **kwargs):
+        import argparse
+
+        values = {
+            "directory": self.test_dir,
+            "server_url": None,
+            "principal_url": None,
+            "principal": "/user/",
+            "autocreate": False,
+            "username": None,
+            "password_file": None,
+            "unix_socket": None,
+        }
+        values.update(kwargs)
+        return argparse.Namespace(**values)
+
+    def test_add_import_imip_parser(self):
+        import argparse
+        import sys
+        from io import StringIO
+
+        parser = argparse.ArgumentParser()
+        import_imip.add_parser(parser)
+
+        old_stderr = sys.stderr
+        sys.stderr = StringIO()
+        try:
+            with self.assertRaises(SystemExit):
+                parser.parse_args([])
+        finally:
+            sys.stderr = old_stderr
+
+        args = parser.parse_args(["-d", "/test/dir", "--principal", "/alice/"])
+        self.assertEqual("/test/dir", args.directory)
+        self.assertIsNone(args.server_url)
+        self.assertIsNone(args.principal_url)
+        self.assertEqual("/alice/", args.principal)
+        self.assertFalse(args.autocreate)
+
+        args = parser.parse_args(
+            [
+                "--server-url",
+                "https://dav.example/user/inbox/",
+                "--username",
+                "bob",
+                "--password-file",
+                "/run/secrets/xandikos-password",
+                "--unix-socket",
+                "/run/xandikos.sock",
+            ]
+        )
+        self.assertIsNone(args.directory)
+        self.assertEqual("https://dav.example/user/inbox/", args.server_url)
+        self.assertIsNone(args.principal_url)
+        self.assertEqual("bob", args.username)
+        self.assertEqual("/run/secrets/xandikos-password", args.password_file)
+        self.assertEqual("/run/xandikos.sock", args.unix_socket)
+
+        args = parser.parse_args(["--principal-url", "http://localhost/user/"])
+        self.assertIsNone(args.directory)
+        self.assertIsNone(args.server_url)
+        self.assertEqual("http://localhost/user/", args.principal_url)
+
+    def test_import_imip_autocreates_and_applies_request(self):
+        result = asyncio.run(
+            import_imip.main(
+                self._args(autocreate=True),
+                None,
+                data=_imip_message(),
+            )
+        )
+
+        self.assertEqual(0, result)
+        backend = SingleUserFilesystemBackend(self.test_dir)
+        backend._mark_as_principal("/user")
+        inbox = backend.get_resource("/user/inbox")
+        calendar = backend.get_resource("/user/calendars/calendar")
+
+        self.assertEqual(1, len(list(inbox.members())))
+        calendar_members = list(calendar.members())
+        self.assertEqual(1, len(calendar_members))
+        name, member = calendar_members[0]
+        file = calendar.store.get_file(name, member.get_content_type(), member.etag)
+        body = b"".join(file.content)
+        self.assertIn(b"UID:imip-request@example.com", body)
+        self.assertNotIn(b"METHOD:REQUEST", body)
+
+    def test_import_imip_requires_existing_principal_without_autocreate(self):
+        with self.assertLogs("xandikos.import_imip", level=logging.ERROR):
+            result = asyncio.run(
+                import_imip.main(self._args(), None, data=_imip_message())
+            )
+
+        self.assertEqual(1, result)
+
+    def test_import_imip_rejects_invalid_message(self):
+        with self.assertLogs("xandikos.import_imip", level=logging.ERROR):
+            result = asyncio.run(
+                import_imip.main(
+                    self._args(autocreate=True),
+                    None,
+                    data=b"Subject: nope\r\n\r\nhello",
+                )
+            )
+
+        self.assertEqual(1, result)
+
+    def test_import_imip_posts_extracted_itip_to_server(self):
+        captured = {}
+
+        async def post_itip_to_server(
+            url, calendar_data, *, username, password, unix_socket
+        ):
+            captured["url"] = url
+            captured["calendar_data"] = calendar_data
+            captured["username"] = username
+            captured["password"] = password
+            captured["unix_socket"] = unix_socket
+
+        password_file = os.path.join(self.test_dir, "password")
+        with open(password_file, "w") as f:
+            f.write("secret\n")
+
+        with patch("xandikos.import_imip._post_itip_to_server", post_itip_to_server):
+            result = asyncio.run(
+                import_imip.main(
+                    self._args(
+                        directory=None,
+                        server_url="https://dav.example/user/inbox/",
+                        username="bob",
+                        password_file=password_file,
+                        unix_socket="/run/xandikos.sock",
+                    ),
+                    None,
+                    data=_imip_message(),
+                )
+            )
+
+        self.assertEqual(0, result)
+        self.assertEqual("https://dav.example/user/inbox/", captured["url"])
+        self.assertIn(b"METHOD:REQUEST", captured["calendar_data"])
+        self.assertEqual("bob", captured["username"])
+        self.assertEqual("secret", captured["password"])
+        self.assertEqual("/run/xandikos.sock", captured["unix_socket"])
+
+    def test_import_imip_reports_server_post_failure(self):
+        async def post_itip_to_server(
+            url, calendar_data, *, username, password, unix_socket
+        ):
+            raise RuntimeError("boom")
+
+        with patch("xandikos.import_imip._post_itip_to_server", post_itip_to_server):
+            with self.assertLogs("xandikos.import_imip", level=logging.ERROR):
+                result = asyncio.run(
+                    import_imip.main(
+                        self._args(
+                            directory=None,
+                            server_url="https://dav.example/user/inbox/",
+                        ),
+                        None,
+                        data=_imip_message(),
+                    )
+                )
+
+        self.assertEqual(1, result)
+
+    def test_import_imip_discovers_schedule_inbox_from_principal(self):
+        captured = {}
+
+        async def discover_schedule_inbox_url(
+            principal_url, *, username, password, unix_socket
+        ):
+            captured["principal_url"] = principal_url
+            captured["discover_username"] = username
+            captured["discover_password"] = password
+            captured["discover_unix_socket"] = unix_socket
+            return "http://localhost/user/inbox/"
+
+        async def post_itip_to_server(
+            url, calendar_data, *, username, password, unix_socket
+        ):
+            captured["url"] = url
+            captured["calendar_data"] = calendar_data
+            captured["post_username"] = username
+            captured["post_password"] = password
+            captured["post_unix_socket"] = unix_socket
+
+        with (
+            patch(
+                "xandikos.import_imip._discover_schedule_inbox_url",
+                discover_schedule_inbox_url,
+            ),
+            patch("xandikos.import_imip._post_itip_to_server", post_itip_to_server),
+        ):
+            result = asyncio.run(
+                import_imip.main(
+                    self._args(
+                        directory=None,
+                        principal_url="http://localhost/user/",
+                        username="bob",
+                        unix_socket="/run/xandikos.sock",
+                    ),
+                    None,
+                    data=_imip_message(),
+                )
+            )
+
+        self.assertEqual(0, result)
+        self.assertEqual("http://localhost/user/", captured["principal_url"])
+        self.assertEqual("http://localhost/user/inbox/", captured["url"])
+        self.assertIn(b"METHOD:REQUEST", captured["calendar_data"])
+        self.assertEqual("bob", captured["discover_username"])
+        self.assertEqual("bob", captured["post_username"])
+        self.assertEqual("/run/xandikos.sock", captured["discover_unix_socket"])
+        self.assertEqual("/run/xandikos.sock", captured["post_unix_socket"])
+
+
 class MainCommandTests(unittest.TestCase):
     def test_main_create_collection_subcommand(self):
         """Test that the main function recognizes create-collection subcommand."""
@@ -226,6 +486,7 @@ class MainCommandTests(unittest.TestCase):
         # Check that help was printed and includes create-collection
         help_output = captured_output.getvalue()
         self.assertIn("create-collection", help_output)
+        self.assertIn("import-imip", help_output)
 
     def test_main_invalid_subcommand(self):
         """Test handling of invalid subcommands."""
@@ -268,6 +529,29 @@ class MainCommandTests(unittest.TestCase):
         self.assertIn("--name", help_output)
         self.assertIn("--displayname", help_output)
 
+    def test_main_import_imip_help(self):
+        """Test import-imip subcommand help."""
+        import sys
+        from io import StringIO
+
+        old_stdout = sys.stdout
+        captured_output = StringIO()
+        sys.stdout = captured_output
+
+        try:
+            with self.assertRaises(SystemExit):
+                asyncio.run(main(["import-imip", "--help"]))
+        finally:
+            sys.stdout = old_stdout
+
+        help_output = captured_output.getvalue()
+        self.assertIn("--principal", help_output)
+        self.assertIn("--autocreate", help_output)
+        self.assertIn("--server-url", help_output)
+        self.assertIn("--principal-url", help_output)
+        self.assertIn("--password-file", help_output)
+        self.assertIn("--unix-socket", help_output)
+
     def test_main_help_subcommand(self):
         """Test that 'help' subcommand prints usage and returns 0."""
         import sys
@@ -287,4 +571,5 @@ class MainCommandTests(unittest.TestCase):
         # Should list all subcommands
         self.assertIn("serve", help_output)
         self.assertIn("create-collection", help_output)
+        self.assertIn("import-imip", help_output)
         self.assertIn("help", help_output)

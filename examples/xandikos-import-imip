@@ -1,0 +1,13 @@
+#!/bin/sh
+#
+# Example wrapper for Dovecot Pigeonhole's vnd.dovecot.pipe extension.
+#
+# Copy or symlink this script into Dovecot's sieve_pipe_bin_dir, then use
+# examples/sieve.example to pipe iMIP messages to it.
+
+set -eu
+
+XANDIKOS_SERVER_URL="${XANDIKOS_SERVER_URL:-http://localhost:8080/user/inbox/}"
+
+exec xandikos import-imip \
+    --server-url "$XANDIKOS_SERVER_URL"

@@ -114,6 +114,7 @@ async def main(argv):
     # For now, just invoke xandikos.web
     from . import web
     from . import multi_user
+    from . import import_imip
 
     parser = argparse.ArgumentParser()
 
@@ -134,6 +135,12 @@ async def main(argv):
     )
     add_create_collection_parser(create_parser)
 
+    import_imip_parser = subparsers.add_parser(
+        "import-imip",
+        help="Import an iMIP email message from stdin into a schedule inbox",
+    )
+    import_imip.add_parser(import_imip_parser)
+
     multi_user_parser = subparsers.add_parser(
         "multi-user",
         usage="%(prog)s -d ROOT-DIR [OPTIONS]",
@@ -151,6 +158,9 @@ async def main(argv):
         # Configure logging for create-collection subcommand
         logging.basicConfig(level=logging.INFO, format="%(message)s")
         return await create_collection_main(args, parser)
+    elif args.subcommand == "import-imip":
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+        return await import_imip.main(args, parser)
     elif args.subcommand == "help":
         parser.print_help()
         return 0
