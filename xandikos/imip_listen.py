@@ -37,6 +37,7 @@ import asyncio
 import logging
 import os
 import posixpath
+import sys
 from typing import TYPE_CHECKING
 
 from . import imip
@@ -206,6 +207,10 @@ def _parse_socket_mode(mode: str) -> int:
 
 
 def _resolve_socket_group(group: str) -> int:
+    if sys.platform == "win32":
+        raise IMIPListenConfigError(
+            "imip-listen socket group is not supported on Windows"
+        )
     import grp
 
     try:
@@ -246,6 +251,11 @@ async def start_listener(
     if isinstance(target, tuple):
         host, port = target
         server = await loop.create_server(factory, host=host, port=port)
+    elif sys.platform == "win32":
+        raise IMIPListenConfigError(
+            "Unix-socket imip-listen targets are not supported on Windows; "
+            "use host:port instead"
+        )
     else:
         socket_path = target
         # Avoid EADDRINUSE on a stale socket from a previous crash. This

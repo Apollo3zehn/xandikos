@@ -131,7 +131,8 @@ Inbound iMIP via LMTP
 accepts an iMIP message and stores its iTIP payload in the schedule
 inbox of the principal configured with ``--current-user-principal``.
 This avoids the wrapper script and lets MTAs talk to Xandikos
-directly. ``aiosmtpd`` is required:
+directly. Unix-socket targets are POSIX-only; on Windows, use
+``host:port``. ``aiosmtpd`` is required:
 
 .. code-block:: bash
 

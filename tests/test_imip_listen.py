@@ -21,6 +21,7 @@
 
 import asyncio
 import shutil
+import sys
 import tempfile
 import unittest
 from email.message import EmailMessage
@@ -158,6 +159,7 @@ class SocketModeTests(unittest.TestCase):
         self.assertEqual(0o660, imip_listen._parse_socket_mode("660"))
 
 
+@unittest.skipIf(sys.platform == "win32", "Unix sockets are not supported on Windows")
 class LMTPEndToEndTests(unittest.IsolatedAsyncioTestCase):
     """Drive the listener over a real Unix socket using smtplib.LMTP."""
 
