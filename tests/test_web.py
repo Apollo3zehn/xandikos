@@ -2572,3 +2572,227 @@ class AttendeeDelegationTests(unittest.TestCase):
             "2.0;Success",
             params["mailto:dave@example.com"]["SCHEDULE-STATUS"],
         )
+
+
+class OutboundIMIPTests(unittest.TestCase):
+    """Implicit scheduling delivers iTIP to remote attendees via iMIP.
+
+    A non-local ATTENDEE used to be flagged 3.7;Invalid calendar user.
+    With --imip-send configured, the dispatcher hands the iTIP to the
+    transport and records 1.1;Sent (or 5.1 on transport failure)
+    instead. The captured email carries METHOD: REQUEST/REPLY/CANCEL,
+    Reply-To: of the originator, and Auto-Submitted: auto-generated to
+    keep an inbound Sieve hook from looping.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tempdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tempdir)
+        self.backend = SingleUserFilesystemBackend(self.tempdir)
+        self.backend.create_principal("/alice", create_defaults=True)
+        self.backend.create_principal("/bob", create_defaults=True)
+
+        from xandikos import imip_transport
+
+        self.transport = imip_transport.CapturingTransport()
+        self.backend.imip_transport = self.transport
+        self.backend.imip_from = "calendar@server.example"
+
+        self._addresses = {
+            "/alice": ["mailto:alice@example.com"],
+            "/bob": ["mailto:bob@example.com"],
+        }
+        from xandikos.web import Principal
+
+        original = Principal.get_calendar_user_address_set
+        addresses = self._addresses
+
+        def fake_addresses(principal_self):
+            return addresses.get(principal_self.relpath, [])
+
+        Principal.get_calendar_user_address_set = fake_addresses
+        self.addCleanup(setattr, Principal, "get_calendar_user_address_set", original)
+
+    def _alice_calendar(self) -> CalendarCollection:
+        cal = self.backend.get_resource("/alice/calendars/calendar")
+        assert isinstance(cal, CalendarCollection)
+        return cal
+
+    def _bob_calendar(self) -> CalendarCollection:
+        cal = self.backend.get_resource("/bob/calendars/calendar")
+        assert isinstance(cal, CalendarCollection)
+        return cal
+
+    def _stored_attendee_params(self, body: bytes) -> dict[str, dict[str, str]]:
+        from icalendar.cal import Calendar as ICalendar
+
+        parsed = ICalendar.from_ical(body.decode("utf-8"))
+        out: dict[str, dict[str, str]] = {}
+        for comp in parsed.subcomponents:
+            if comp.name != "VEVENT":
+                continue
+            attendees = comp.get("ATTENDEE", [])
+            if not isinstance(attendees, list):
+                attendees = [attendees]
+            for a in attendees:
+                out[str(a)] = {k: str(v) for k, v in a.params.items()}
+        return out
+
+    EVENT_REMOTE_ATTENDEE = (
+        b"BEGIN:VCALENDAR\r\n"
+        b"VERSION:2.0\r\n"
+        b"PRODID:-//Test//EN\r\n"
+        b"BEGIN:VEVENT\r\n"
+        b"UID:meet@example.com\r\n"
+        b"DTSTAMP:20260101T120000Z\r\n"
+        b"SEQUENCE:1\r\n"
+        b"DTSTART:20260601T100000Z\r\n"
+        b"DTEND:20260601T110000Z\r\n"
+        b"SUMMARY:Sync\r\n"
+        b"ORGANIZER:mailto:alice@example.com\r\n"
+        b"ATTENDEE:mailto:carol@elsewhere.example\r\n"
+        b"END:VEVENT\r\n"
+        b"END:VCALENDAR\r\n"
+    )
+
+    def test_organiser_request_sent_to_remote_attendee(self):
+        rewritten = asyncio.run(
+            self._alice_calendar().pre_put_hook(
+                "event.ics", [self.EVENT_REMOTE_ATTENDEE], "text/calendar"
+            )
+        )
+        self.assertEqual(1, len(self.transport.sent))
+        msg = self.transport.sent[0]
+        self.assertEqual("calendar@server.example", msg["From"])
+        self.assertEqual("carol@elsewhere.example", msg["To"])
+        self.assertEqual("alice@example.com", msg["Reply-To"])
+        self.assertEqual("auto-generated", msg["Auto-Submitted"])
+        self.assertEqual("text/calendar", msg.get_content_type())
+        self.assertEqual("REQUEST", msg.get_param("method", header="content-type"))
+
+        params = self._stored_attendee_params(b"".join(rewritten))
+        self.assertEqual(
+            "1.1;Sent",
+            params["mailto:carol@elsewhere.example"]["SCHEDULE-STATUS"],
+        )
+
+    def test_transport_failure_marks_schedule_status_5_1(self):
+        from xandikos import imip_transport
+
+        class FailingTransport:
+            def send(self, message):
+                raise imip_transport.IMIPTransportError("relay refused")
+
+        self.backend.imip_transport = FailingTransport()
+        rewritten = asyncio.run(
+            self._alice_calendar().pre_put_hook(
+                "event.ics", [self.EVENT_REMOTE_ATTENDEE], "text/calendar"
+            )
+        )
+        params = self._stored_attendee_params(b"".join(rewritten))
+        self.assertEqual(
+            "5.1;Service unavailable",
+            params["mailto:carol@elsewhere.example"]["SCHEDULE-STATUS"],
+        )
+
+    def test_disabled_transport_falls_back_to_3_7(self):
+        # NullTransport is what --imip-send=off configures; behaviour
+        # matches the pre-iMIP code path.
+        from xandikos import imip_transport
+
+        self.backend.imip_transport = imip_transport.NullTransport()
+        rewritten = asyncio.run(
+            self._alice_calendar().pre_put_hook(
+                "event.ics", [self.EVENT_REMOTE_ATTENDEE], "text/calendar"
+            )
+        )
+        self.assertEqual(0, len(self.transport.sent))
+        params = self._stored_attendee_params(b"".join(rewritten))
+        self.assertEqual(
+            "3.7;Invalid calendar user",
+            params["mailto:carol@elsewhere.example"]["SCHEDULE-STATUS"],
+        )
+
+    def test_organiser_delete_sends_cancel_to_remote_attendee(self):
+        # Seed alice's calendar with the event, then delete it.
+        self._alice_calendar().store.import_one(
+            "event.ics", "text/calendar", [self.EVENT_REMOTE_ATTENDEE]
+        )
+        asyncio.run(self._alice_calendar().pre_delete_hook("event.ics"))
+        self.assertEqual(1, len(self.transport.sent))
+        msg = self.transport.sent[0]
+        self.assertEqual("CANCEL", msg.get_param("method", header="content-type"))
+        self.assertEqual("carol@elsewhere.example", msg["To"])
+
+    def test_attendee_reply_sent_to_remote_organiser(self):
+        # Bob is invited by an external organiser; bob accepts.
+        invitation = (
+            b"BEGIN:VCALENDAR\r\n"
+            b"VERSION:2.0\r\n"
+            b"PRODID:-//Test//EN\r\n"
+            b"BEGIN:VEVENT\r\n"
+            b"UID:meet@example.com\r\n"
+            b"DTSTAMP:20260101T120000Z\r\n"
+            b"SEQUENCE:1\r\n"
+            b"DTSTART:20260601T100000Z\r\n"
+            b"DTEND:20260601T110000Z\r\n"
+            b"SUMMARY:Sync\r\n"
+            b"ORGANIZER:mailto:carol@elsewhere.example\r\n"
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com\r\n"
+            b"END:VEVENT\r\n"
+            b"END:VCALENDAR\r\n"
+        )
+        self._bob_calendar().store.import_one(
+            "event.ics", "text/calendar", [invitation]
+        )
+        accepted = invitation.replace(b"PARTSTAT=NEEDS-ACTION", b"PARTSTAT=ACCEPTED")
+        asyncio.run(
+            self._bob_calendar().pre_put_hook("event.ics", [accepted], "text/calendar")
+        )
+        self.assertEqual(1, len(self.transport.sent))
+        msg = self.transport.sent[0]
+        self.assertEqual("REPLY", msg.get_param("method", header="content-type"))
+        self.assertEqual("carol@elsewhere.example", msg["To"])
+        self.assertEqual("bob@example.com", msg["Reply-To"])
+
+    def test_delegation_to_remote_delegate(self):
+        # Alice invites bob; bob delegates to a remote dave.
+        invitation = (
+            b"BEGIN:VCALENDAR\r\n"
+            b"VERSION:2.0\r\n"
+            b"PRODID:-//Test//EN\r\n"
+            b"BEGIN:VEVENT\r\n"
+            b"UID:meet@example.com\r\n"
+            b"DTSTAMP:20260101T120000Z\r\n"
+            b"SEQUENCE:1\r\n"
+            b"DTSTART:20260601T100000Z\r\n"
+            b"DTEND:20260601T110000Z\r\n"
+            b"SUMMARY:Sync\r\n"
+            b"ORGANIZER:mailto:alice@example.com\r\n"
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com\r\n"
+            b"END:VEVENT\r\n"
+            b"END:VCALENDAR\r\n"
+        )
+        self._bob_calendar().store.import_one(
+            "event.ics", "text/calendar", [invitation]
+        )
+        delegated = invitation.replace(
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com\r\n",
+            b"ATTENDEE;PARTSTAT=DELEGATED;"
+            b'DELEGATED-TO="mailto:dave@elsewhere.example":mailto:bob@example.com\r\n'
+            b"ATTENDEE;PARTSTAT=NEEDS-ACTION;"
+            b'DELEGATED-FROM="mailto:bob@example.com":mailto:dave@elsewhere.example\r\n',
+        )
+        asyncio.run(
+            self._bob_calendar().pre_put_hook("event.ics", [delegated], "text/calendar")
+        )
+        # Two messages on the wire: REQUEST to dave (the new delegate)
+        # and REPLY to alice (the organiser, who is local — REPLY goes
+        # to her inbox, not the transport). Only the REQUEST shows up
+        # in the capturing transport because alice is local.
+        recipients = [
+            (m["To"], m.get_param("method", header="content-type"))
+            for m in self.transport.sent
+        ]
+        self.assertEqual([("dave@elsewhere.example", "REQUEST")], recipients)
