@@ -25,17 +25,17 @@ The following standards are implemented:
 - :RFC:`5689` (Extended MKCOL) - *fully implemented*
 - :RFC:`6578` (Collection Synchronization for WebDAV) - *fully implemented*
 - :RFC:`7953` (Calendar Availability) - *fully implemented*
-- :RFC:`6638` (CalDAV Scheduling Extensions) - *implemented for local
-  delivery; iMIP for remote attendees not implemented (see below)*
-- :RFC:`5546` (iCal iTIP) - *implemented for messages exchanged over
-  CalDAV scheduling; not exchanged over email (iMIP)*
+- :RFC:`6638` (CalDAV Scheduling Extensions) - *fully implemented*
+- :RFC:`5546` (iCal iTIP) - *implemented for REQUEST, REPLY, CANCEL*
+- :RFC:`6047` (iCalendar Message-Based Interoperability Protocol — iMIP) -
+  *implemented for REQUEST, REPLY, CANCEL; outbound delivery is
+  off by default and configured via* ``--imip-send``
 
 The following standards are not implemented:
 
 - :RFC:`7809` (CalDAV Time Zone Extensions) - *not implemented*
 - :RFC:`7529` (WebDAV Quota) - *not implemented*
 - :RFC:`4709` (WebDAV Mount) - `intentionally <https://github.com/jelmer/xandikos/issues/48>`_ *not implemented*
-- :RFC:`6047` (iCalendar Message-Based Interoperability Protocol — iMIP) - *not implemented*
 - :RFC:`4324` (iCAL CAP) - *not implemented*
 
 Scheduling notes
@@ -50,9 +50,21 @@ stored event. ATTENDEE entries on the organiser's stored event are
 annotated with a SCHEDULE-STATUS parameter recording the delivery
 outcome.
 
-Events with attendees on other servers are stored fine, but those
-remote attendees aren't notified — delivering iTIP over email
-(iMIP, RFC 6047) is not implemented.
+Outbound iMIP for remote attendees is off by default. Set
+``--imip-send=sendmail`` to pipe through a local sendmail-compatible
+binary, or ``--imip-send=smtp`` with ``--smtp-host``/``--smtp-port``
+and (optionally) ``--smtp-encryption=starttls|ssl``,
+``--smtp-user``/``--smtp-password-file``. ``--smtp-from`` sets the
+``From:`` header; the originating organiser/attendee goes in
+``Reply-To:``. Each switch has a matching ``XANDIKOS_*`` environment
+variable (``XANDIKOS_IMIP_SEND``, ``XANDIKOS_SMTP_HOST``,
+``XANDIKOS_SMTP_FROM``, etc.) for Docker deployments.
+
+Inbound iMIP arrives via the ``xandikos import-imip`` subcommand,
+typically piped from a Dovecot Sieve rule — see
+``examples/sieve.example`` and ``examples/xandikos-import-imip``.
+Server-generated traffic carrying ``Auto-Submitted: auto-generated``
+is skipped to avoid loops.
 
 See `DAV compliance <notes/dav-compliance.rst>`_ for more detail on specification compliance.
 
