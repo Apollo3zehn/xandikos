@@ -62,9 +62,19 @@ variable (``XANDIKOS_IMIP_SEND``, ``XANDIKOS_SMTP_HOST``,
 
 Inbound iMIP arrives via the ``xandikos import-imip`` subcommand,
 typically piped from a Dovecot Sieve rule — see
-``examples/sieve.example`` and ``examples/xandikos-import-imip``.
-Server-generated traffic carrying ``Auto-Submitted: auto-generated``
-is skipped to avoid loops.
+``examples/sieve.example`` and ``examples/xandikos-import-imip``. For
+deployments that prefer to deliver from an MTA directly, ``xandikos
+serve --imip-listen=unix:/path/to/sock`` (or ``host:port``) exposes
+an LMTP endpoint that accepts iMIP messages and stores them in the
+configured principal's schedule inbox. See
+``examples/dovecot-lmtp.example`` for a server-wide setup using a
+Dovecot ``sieve_before`` script and a single Postfix transport entry —
+no per-user configuration. ``XANDIKOS_IMIP_LISTEN`` /
+``XANDIKOS_IMIP_LISTEN_MODE`` / ``XANDIKOS_IMIP_LISTEN_GROUP``
+environment variables work for Docker deployments. The listener uses
+the optional ``aiosmtpd`` dependency (``pip install
+'xandikos[imip-listen]'``). Server-generated traffic carrying
+``Auto-Submitted: auto-generated`` is skipped to avoid loops.
 
 See `DAV compliance <notes/dav-compliance.rst>`_ for more detail on specification compliance.
 

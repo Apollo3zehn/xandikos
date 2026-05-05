@@ -8,6 +8,7 @@ Xandikos
    installation
    getting-started
    configuration
+   imip
    reverse-proxy
    clients
    troubleshooting

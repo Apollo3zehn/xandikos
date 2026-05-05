@@ -49,6 +49,7 @@ from xandikos import (
     caldav,
     carddav,
     imip,
+    imip_listen,
     imip_transport as imip_transport_mod,
     infit,
     itip,
@@ -2579,6 +2580,7 @@ def add_parser(parser):
     )
 
     imip_transport_mod.add_arguments(parser)
+    imip_listen.add_arguments(parser)
 
 
 async def main(options, parser):
@@ -2747,6 +2749,34 @@ async def main(options, parser):
     for site in sites:
         await site.start()
 
+    imip_listener: imip_listen.Listener | None = None
+    if options.imip_listen:
+        try:
+            import aiosmtpd  # noqa: F401
+        except ImportError:
+            parser.error(
+                "--imip-listen requires the aiosmtpd package; "
+                "install with: pip install 'xandikos[imip-listen]'"
+            )
+        try:
+            target = imip_listen.parse_listen_target(options.imip_listen)
+        except imip_listen.IMIPListenConfigError as exc:
+            parser.error(str(exc))
+        handler = imip_listen.IMIPLMTPHandler(backend, options.current_user_principal)
+        try:
+            imip_listener = await imip_listen.start_listener(
+                target,
+                handler,
+                socket_mode=options.imip_listen_mode,
+                socket_group=options.imip_listen_group,
+            )
+        except imip_listen.IMIPListenConfigError as exc:
+            parser.error(str(exc))
+        if isinstance(target, tuple):
+            logger.info("Listening for iMIP on LMTP %s:%s", target[0], target[1])
+        else:
+            logger.info("Listening for iMIP on LMTP unix socket %s", target)
+
     # Set socket group ownership after the socket is created
     if socket_path and options.socket_group is not None:
         import grp
@@ -2781,6 +2811,9 @@ async def main(options, parser):
     logger.info("Stopping web servers...")
     for site in sites:
         await site.stop()
+
+    if imip_listener is not None:
+        await imip_listener.stop()
 
     await runner.cleanup()
     if metrics_app:
