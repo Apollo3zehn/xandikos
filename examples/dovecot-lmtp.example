@@ -1,0 +1,83 @@
+# Server-wide delivery of iMIP messages to the Xandikos LMTP listener,
+# without any per-user configuration.
+#
+# This combines two pieces:
+#
+# 1. A Pigeonhole ``sieve_before`` script. Dovecot runs ``sieve_before``
+#    rules ahead of every user's personal Sieve script, so a single
+#    admin-managed file applies to every recipient automatically. New
+#    users do not need to install or update anything.
+#
+# 2. A single Postfix ``transport_maps`` entry that routes the synthetic
+#    address used by the Sieve rule to the Xandikos LMTP socket. Also
+#    server-wide and untouched per user.
+#
+# Prerequisites
+# -------------
+#
+# Run xandikos serve with --imip-listen, e.g.:
+#
+#     xandikos serve -d /var/lib/xandikos \
+#         --imip-listen=unix:/run/xandikos/imip.sock \
+#         --imip-listen-mode=660 --imip-listen-group=postfix
+#
+# Dovecot Pigeonhole sieve_before
+# -------------------------------
+#
+# /etc/dovecot/conf.d/90-sieve.conf (or your existing plugin block):
+#
+#     plugin {
+#       sieve_before = /etc/dovecot/sieve/imip-to-xandikos.sieve
+#     }
+#
+# /etc/dovecot/sieve/imip-to-xandikos.sieve:
+#
+#     require ["body", "copy"];
+#
+#     if anyof (
+#         header :contains "Content-Type" "text/calendar",
+#         body :raw :contains "BEGIN:VCALENDAR"
+#     ) {
+#         redirect :copy "xandikos@localhost";
+#     }
+#
+# Compile with ``sievec /etc/dovecot/sieve/imip-to-xandikos.sieve`` after
+# editing. The ``:copy`` modifier on ``redirect`` is what keeps normal
+# mailbox delivery intact — without it, the redirect would *replace*
+# delivery and the user's INBOX would never see the message.
+#
+# Postfix transport route
+# -----------------------
+#
+# /etc/postfix/main.cf:
+#
+#     transport_maps = hash:/etc/postfix/xandikos_transport
+#
+# /etc/postfix/xandikos_transport:
+#
+#     xandikos@localhost    xandikos:
+#
+# /etc/postfix/master.cf:
+#
+#     xandikos  unix  -       -       n       -       -       lmtp
+#         -o lmtp_destination_recipient_limit=1
+#         -o disable_mime_output_conversion=yes
+#         -o syslog_name=postfix/xandikos
+#         -o smtp_send_xforward_command=no
+#         -o lmtp_send_xforward_command=no
+#
+# Run ``postmap /etc/postfix/xandikos_transport`` and reload Postfix.
+#
+# Notes
+# -----
+#
+# * The synthetic address ``xandikos@localhost`` exists only as a routing
+#   handle; it never appears in user-visible headers and is not a
+#   deliverable mailbox. Pick any local-looking address you like as long
+#   as Postfix considers it deliverable enough to route via
+#   transport_maps.
+# * Restrict the LMTP socket with ``--imip-listen-mode`` /
+#   ``--imip-listen-group`` so only the MTA delivery user can connect.
+# * Server-generated iTIP traffic carrying ``Auto-Submitted:
+#   auto-generated`` is dropped by the listener, so this fan-out does
+#   not create iMIP loops.
