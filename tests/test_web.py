@@ -2714,6 +2714,30 @@ class OutboundIMIPTests(unittest.TestCase):
             params["mailto:carol@elsewhere.example"]["SCHEDULE-STATUS"],
         )
 
+    def test_missing_smtp_from_logs_warning_and_marks_3_7(self):
+        # Operator misconfiguration: --imip-send is on, but
+        # --smtp-from was not set. The dispatcher refuses to send
+        # without a server identity, logs a warning, and labels the
+        # ATTENDEE 3.7 instead of silently sending mail with an empty
+        # From: header.
+        self.backend.imip_from = None
+        with self.assertLogs("xandikos", level="WARNING") as logs:
+            rewritten = asyncio.run(
+                self._alice_calendar().pre_put_hook(
+                    "event.ics", [self.EVENT_REMOTE_ATTENDEE], "text/calendar"
+                )
+            )
+        self.assertEqual(0, len(self.transport.sent))
+        params = self._stored_attendee_params(b"".join(rewritten))
+        self.assertEqual(
+            "3.7;Invalid calendar user",
+            params["mailto:carol@elsewhere.example"]["SCHEDULE-STATUS"],
+        )
+        self.assertTrue(
+            any("smtp-from" in line for line in logs.output),
+            logs.output,
+        )
+
     def test_organiser_delete_sends_cancel_to_remote_attendee(self):
         # Seed alice's calendar with the event, then delete it.
         self._alice_calendar().store.import_one(

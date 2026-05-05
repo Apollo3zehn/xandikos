@@ -1366,11 +1366,15 @@ async def _send_via_imip(
 ) -> str:
     """Hand *message* to the configured outbound iMIP transport.
 
-    Returns the SCHEDULE-STATUS code reflecting the outcome.
+    Returns the SCHEDULE-STATUS code reflecting the outcome. Backends
+    that don't carry iMIP configuration (i.e. anything other than
+    :class:`SingleUserFilesystemBackend`) behave as if iMIP is off.
     """
-    transport = getattr(backend, "imip_transport", None)
-    sender = getattr(backend, "imip_from", None)
-    if transport is None or isinstance(transport, imip_transport_mod.NullTransport):
+    if not isinstance(backend, SingleUserFilesystemBackend):
+        return itip.REQUEST_STATUS_INVALID_CALENDAR_USER
+    transport = backend.imip_transport
+    sender = backend.imip_from
+    if isinstance(transport, imip_transport_mod.NullTransport):
         return itip.REQUEST_STATUS_INVALID_CALENDAR_USER
     if sender is None:
         logger.warning(
@@ -2072,7 +2076,7 @@ class SingleUserFilesystemBackend(FilesystemBackend):
         eager_indexing: bool = False,
         autocreate: bool = False,
         show_principals_on_root: bool = True,
-        imip_transport: "imip_transport_mod.IMIPTransport | None" = None,
+        imip_transport: imip_transport_mod.IMIPTransport | None = None,
         imip_from: str | None = None,
     ) -> None:
         super().__init__(path)
@@ -2082,7 +2086,11 @@ class SingleUserFilesystemBackend(FilesystemBackend):
         self.eager_indexing = eager_indexing
         self.autocreate = autocreate
         self.show_principals_on_root = show_principals_on_root
-        self.imip_transport = imip_transport
+        self.imip_transport: imip_transport_mod.IMIPTransport = (
+            imip_transport
+            if imip_transport is not None
+            else imip_transport_mod.NullTransport()
+        )
         self.imip_from = imip_from
         self._open_store = functools.lru_cache(maxsize=16)(self._open_store_uncached)
 
