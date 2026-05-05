@@ -28,7 +28,9 @@ without aborting the originating CalDAV operation.
 
 from __future__ import annotations
 
+import argparse
 import logging
+import os
 import smtplib
 import subprocess
 from email.message import EmailMessage
@@ -180,3 +182,117 @@ class SMTPTransport:
         if self.use_ssl:
             return smtplib.SMTP_SSL(self.host, self.port, timeout=self.timeout)
         return smtplib.SMTP(self.host, self.port, timeout=self.timeout)
+
+
+def _env(name: str, default: str | None = None) -> str | None:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return value
+
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register outbound iMIP CLI flags on *parser*.
+
+    Each flag has a matching ``XANDIKOS_*`` environment variable so Docker
+    deployments can configure SMTP without rewriting the entrypoint.
+    """
+    group = parser.add_argument_group(title="Outbound iMIP (RFC 6047)")
+    group.add_argument(
+        "--imip-send",
+        choices=["off", "sendmail", "smtp"],
+        default=_env("XANDIKOS_IMIP_SEND", "off"),
+        help=(
+            "Outbound iMIP delivery mode for non-local attendees. "
+            "[default: off; env: XANDIKOS_IMIP_SEND]"
+        ),
+    )
+    group.add_argument(
+        "--smtp-from",
+        default=_env("XANDIKOS_SMTP_FROM"),
+        help=(
+            "Sender address used in the From: header of outbound iMIP "
+            "(server identity; the originating organiser/attendee goes in "
+            "Reply-To). [env: XANDIKOS_SMTP_FROM]"
+        ),
+    )
+    group.add_argument(
+        "--sendmail-binary",
+        default=_env("XANDIKOS_SENDMAIL_BINARY", "/usr/sbin/sendmail"),
+        help=(
+            "Path to the sendmail-compatible binary used when "
+            "--imip-send=sendmail. [default: %(default)s; "
+            "env: XANDIKOS_SENDMAIL_BINARY]"
+        ),
+    )
+    group.add_argument(
+        "--smtp-host",
+        default=_env("XANDIKOS_SMTP_HOST"),
+        help="SMTP relay hostname. [env: XANDIKOS_SMTP_HOST]",
+    )
+    group.add_argument(
+        "--smtp-port",
+        type=int,
+        default=int(_env("XANDIKOS_SMTP_PORT", "25") or "25"),
+        help="SMTP relay port. [default: %(default)s; env: XANDIKOS_SMTP_PORT]",
+    )
+    group.add_argument(
+        "--smtp-encryption",
+        choices=["none", "starttls", "ssl"],
+        default=_env("XANDIKOS_SMTP_ENCRYPTION", "none"),
+        help=(
+            "Transport encryption for SMTP. [default: %(default)s; "
+            "env: XANDIKOS_SMTP_ENCRYPTION]"
+        ),
+    )
+    group.add_argument(
+        "--smtp-user",
+        default=_env("XANDIKOS_SMTP_USER"),
+        help="SMTP LOGIN username. [env: XANDIKOS_SMTP_USER]",
+    )
+    group.add_argument(
+        "--smtp-password-file",
+        default=_env("XANDIKOS_SMTP_PASSWORD_FILE"),
+        help=(
+            "Path to a file containing the SMTP LOGIN password. "
+            "[env: XANDIKOS_SMTP_PASSWORD_FILE]"
+        ),
+    )
+
+
+def from_args(args: argparse.Namespace) -> IMIPTransport:
+    """Build an :class:`IMIPTransport` from parsed CLI arguments.
+
+    Returns :class:`NullTransport` when ``--imip-send=off`` (the default).
+    Raises :class:`SystemExit` via ``argparse.ArgumentTypeError`` semantics
+    when a chosen mode is missing required configuration.
+    """
+    mode = getattr(args, "imip_send", None) or "off"
+    if mode == "off":
+        return NullTransport()
+    if mode == "sendmail":
+        return SendmailTransport(binary=args.sendmail_binary)
+    if mode == "smtp":
+        if not args.smtp_host:
+            raise argparse.ArgumentTypeError(
+                "--imip-send=smtp requires --smtp-host (or XANDIKOS_SMTP_HOST)"
+            )
+        password: str | None = None
+        if args.smtp_user is not None:
+            if not args.smtp_password_file:
+                raise argparse.ArgumentTypeError(
+                    "--smtp-user requires --smtp-password-file "
+                    "(or XANDIKOS_SMTP_PASSWORD_FILE)"
+                )
+            with open(args.smtp_password_file) as f:
+                password = f.read().rstrip("\n")
+        encryption = args.smtp_encryption or "none"
+        return SMTPTransport(
+            args.smtp_host,
+            args.smtp_port,
+            username=args.smtp_user,
+            password=password,
+            use_starttls=(encryption == "starttls"),
+            use_ssl=(encryption == "ssl"),
+        )
+    raise argparse.ArgumentTypeError(f"unknown --imip-send mode: {mode!r}")

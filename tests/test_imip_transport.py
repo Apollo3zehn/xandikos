@@ -19,8 +19,11 @@
 
 """Tests for xandikos.imip_transport (outbound iMIP transports)."""
 
+import argparse
+import os
 import smtplib
 import subprocess
+import tempfile
 import unittest
 from email.message import EmailMessage
 from unittest import mock
@@ -186,6 +189,134 @@ class SMTPTransportTests(unittest.TestCase):
                 with self.assertRaises(imip_transport.IMIPTransportError):
                     transport.send(_build_message())
         self.assertTrue(fake.quit_called)
+
+
+def _parse(argv: list[str], env: dict[str, str] | None = None) -> argparse.Namespace:
+    """Parse *argv* with imip_transport options under a controlled env."""
+    overrides = env or {}
+    with mock.patch.dict(
+        os.environ,
+        {k: v for k, v in overrides.items()},
+        clear=False,
+    ):
+        for key in (
+            "XANDIKOS_IMIP_SEND",
+            "XANDIKOS_SMTP_FROM",
+            "XANDIKOS_SENDMAIL_BINARY",
+            "XANDIKOS_SMTP_HOST",
+            "XANDIKOS_SMTP_PORT",
+            "XANDIKOS_SMTP_ENCRYPTION",
+            "XANDIKOS_SMTP_USER",
+            "XANDIKOS_SMTP_PASSWORD_FILE",
+        ):
+            if key not in overrides:
+                os.environ.pop(key, None)
+        parser = argparse.ArgumentParser()
+        imip_transport.add_arguments(parser)
+        return parser.parse_args(argv)
+
+
+class ArgumentParsingTests(unittest.TestCase):
+    def test_default_is_off(self) -> None:
+        args = _parse([])
+        self.assertEqual("off", args.imip_send)
+        self.assertIsInstance(
+            imip_transport.from_args(args), imip_transport.NullTransport
+        )
+
+    def test_env_overrides_default(self) -> None:
+        args = _parse([], env={"XANDIKOS_IMIP_SEND": "sendmail"})
+        self.assertEqual("sendmail", args.imip_send)
+
+    def test_cli_overrides_env(self) -> None:
+        args = _parse(["--imip-send", "off"], env={"XANDIKOS_IMIP_SEND": "sendmail"})
+        self.assertEqual("off", args.imip_send)
+
+    def test_sendmail_uses_configured_binary(self) -> None:
+        args = _parse(["--imip-send", "sendmail", "--sendmail-binary", "/x/sendmail"])
+        transport = imip_transport.from_args(args)
+        self.assertIsInstance(transport, imip_transport.SendmailTransport)
+        assert isinstance(transport, imip_transport.SendmailTransport)
+        self.assertEqual("/x/sendmail", transport.binary)
+
+    def test_sendmail_binary_from_env(self) -> None:
+        args = _parse(
+            [],
+            env={
+                "XANDIKOS_IMIP_SEND": "sendmail",
+                "XANDIKOS_SENDMAIL_BINARY": "/opt/sendmail",
+            },
+        )
+        transport = imip_transport.from_args(args)
+        assert isinstance(transport, imip_transport.SendmailTransport)
+        self.assertEqual("/opt/sendmail", transport.binary)
+
+    def test_smtp_requires_host(self) -> None:
+        args = _parse(["--imip-send", "smtp"])
+        with self.assertRaises(argparse.ArgumentTypeError):
+            imip_transport.from_args(args)
+
+    def test_smtp_user_requires_password_file(self) -> None:
+        args = _parse(
+            [
+                "--imip-send",
+                "smtp",
+                "--smtp-host",
+                "smtp.example.org",
+                "--smtp-user",
+                "alice",
+            ]
+        )
+        with self.assertRaises(argparse.ArgumentTypeError):
+            imip_transport.from_args(args)
+
+    def test_smtp_with_starttls_and_password(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False) as fh:
+            fh.write("hunter2\n")
+            password_path = fh.name
+        try:
+            args = _parse(
+                [
+                    "--imip-send",
+                    "smtp",
+                    "--smtp-host",
+                    "smtp.example.org",
+                    "--smtp-port",
+                    "587",
+                    "--smtp-encryption",
+                    "starttls",
+                    "--smtp-user",
+                    "alice",
+                    "--smtp-password-file",
+                    password_path,
+                ]
+            )
+            transport = imip_transport.from_args(args)
+        finally:
+            os.unlink(password_path)
+        assert isinstance(transport, imip_transport.SMTPTransport)
+        self.assertEqual("smtp.example.org", transport.host)
+        self.assertEqual(587, transport.port)
+        self.assertTrue(transport.use_starttls)
+        self.assertFalse(transport.use_ssl)
+        self.assertEqual("alice", transport.username)
+        self.assertEqual("hunter2", transport.password)
+
+    def test_smtp_ssl_from_env(self) -> None:
+        args = _parse(
+            [],
+            env={
+                "XANDIKOS_IMIP_SEND": "smtp",
+                "XANDIKOS_SMTP_HOST": "smtp.example.org",
+                "XANDIKOS_SMTP_PORT": "465",
+                "XANDIKOS_SMTP_ENCRYPTION": "ssl",
+            },
+        )
+        transport = imip_transport.from_args(args)
+        assert isinstance(transport, imip_transport.SMTPTransport)
+        self.assertEqual(465, transport.port)
+        self.assertTrue(transport.use_ssl)
+        self.assertFalse(transport.use_starttls)
 
 
 if __name__ == "__main__":

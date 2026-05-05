@@ -36,8 +36,12 @@ import socket
 import urllib.parse
 from collections.abc import Iterable, Iterator
 from email.utils import parseaddr
+from typing import TYPE_CHECKING
 from dulwich.web import make_wsgi_chain
 from dulwich.server import DictBackend
+
+if TYPE_CHECKING:
+    from . import imip_transport as imip_transport_mod
 from itertools import takewhile
 
 import jinja2
@@ -2020,6 +2024,8 @@ class SingleUserFilesystemBackend(FilesystemBackend):
         eager_indexing: bool = False,
         autocreate: bool = False,
         show_principals_on_root: bool = True,
+        imip_transport: "imip_transport_mod.IMIPTransport | None" = None,
+        imip_from: str | None = None,
     ) -> None:
         super().__init__(path)
         self._user_principals: set[str] = set()
@@ -2028,6 +2034,8 @@ class SingleUserFilesystemBackend(FilesystemBackend):
         self.eager_indexing = eager_indexing
         self.autocreate = autocreate
         self.show_principals_on_root = show_principals_on_root
+        self.imip_transport = imip_transport
+        self.imip_from = imip_from
         self._open_store = functools.lru_cache(maxsize=16)(self._open_store_uncached)
 
     def _open_store_uncached(self, path: str):
@@ -2514,6 +2522,10 @@ def add_parser(parser):
         help="Pre-populate indexes at startup for faster initial queries.",
     )
 
+    from . import imip_transport
+
+    imip_transport.add_arguments(parser)
+
 
 async def main(options, parser):
     if options.dump_dav_xml:
@@ -2531,11 +2543,15 @@ async def main(options, parser):
 
     logging.basicConfig(level=loglevel, format="%(message)s")
 
+    from . import imip_transport
+
     backend = SingleUserFilesystemBackend(
         os.path.abspath(options.directory),
         paranoid=options.paranoid,
         index_threshold=options.index_threshold,
         eager_indexing=options.eager,
+        imip_transport=imip_transport.from_args(options),
+        imip_from=options.smtp_from,
     )
     backend._mark_as_principal(options.current_user_principal)
 
