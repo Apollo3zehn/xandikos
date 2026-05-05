@@ -75,7 +75,7 @@ def extract_payload(message: Message) -> IMIPPayload:
 
     calendar_data = _part_payload_bytes(part)
     try:
-        calendar = Calendar.from_ical(calendar_data.decode('utf-8'))
+        calendar = Calendar.from_ical(calendar_data.decode("utf-8"))
     except ValueError as exc:
         raise InvalidIMIPMessage(f"Invalid iCalendar payload: {exc}") from exc
     if not isinstance(calendar, Calendar):
