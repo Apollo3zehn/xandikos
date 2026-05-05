@@ -48,6 +48,8 @@ from xandikos import (
     apache,
     caldav,
     carddav,
+    imip,
+    imip_transport as imip_transport_mod,
     infit,
     itip,
     quota,
@@ -1084,10 +1086,9 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
             return
 
         cancel = itip.build_itip_cancel(cal)
+        organiser = _organiser_address(cal)
         for address in attendees:
-            await scheduling.deliver_to_inbox(
-                self.backend, address, cancel, name_hint=None
-            )
+            await _deliver_status(self.backend, address, cancel, originator=organiser)
 
     async def pre_put_hook(
         self,
@@ -1238,11 +1239,12 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
     ) -> dict[str, str]:
         """Send REQUEST/CANCEL and return ``{address: SCHEDULE-STATUS code}``."""
         outcomes: dict[str, str] = {}
+        organiser = _organiser_address(new_cal)
         if new_attendees:
             request = itip.build_itip_request(new_cal)
             for address in new_attendees:
                 outcomes[address] = await _deliver_status(
-                    self.backend, address, request
+                    self.backend, address, request, originator=organiser
                 )
 
         if old_cal is None:
@@ -1254,9 +1256,10 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
             for address in dropped:
                 # Dropped attendees aren't in new_cal, so their CANCEL
                 # delivery outcomes don't end up annotated anywhere; the
-                # CANCEL itself is the record.
-                await scheduling.deliver_to_inbox(
-                    self.backend, address, cancel, name_hint=None
+                # CANCEL itself is the record. Still goes through the
+                # iMIP path for non-local recipients.
+                await _deliver_status(
+                    self.backend, address, cancel, originator=organiser
                 )
         return outcomes
 
@@ -1275,6 +1278,7 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
         ATTENDEE doesn't carry SCHEDULE-STATUS).
         """
         outcomes: dict[str, str] = {}
+        own_address = _own_attendee_address(new_cal, own_addresses)
 
         # RFC 6638 §3.2.6: when the user delegates to someone else,
         # the new delegate needs a REQUEST so they see the meeting.
@@ -1282,10 +1286,9 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
             request = itip.build_itip_request(new_cal)
             for address in new_delegates:
                 outcomes[address] = await _deliver_status(
-                    self.backend, address, request
+                    self.backend, address, request, originator=own_address
                 )
 
-        own_address = _own_attendee_address(new_cal, own_addresses)
         if own_address is None:
             return outcomes
         organiser = _organiser_address(new_cal)
@@ -1304,9 +1307,7 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
         if not forced and not _partstat_changed(new_cal, old_cal, own_address):
             return outcomes
         reply = itip.build_itip_reply(new_cal, own_address)
-        await scheduling.deliver_to_inbox(
-            self.backend, organiser, reply, name_hint=None
-        )
+        await _deliver_status(self.backend, organiser, reply, originator=own_address)
         return outcomes
 
     def _owning_principal(self) -> webdav.Principal | None:
@@ -1332,21 +1333,76 @@ async def _calendar_from_member(member: webdav.Resource) -> Calendar | None:
 
 
 async def _deliver_status(
-    backend: webdav.Backend, address: str, message: Calendar
+    backend: webdav.Backend,
+    address: str,
+    message: Calendar,
+    *,
+    originator: str | None = None,
 ) -> str:
     """Deliver *message* to *address* and return a SCHEDULE-STATUS code.
 
-    Per RFC 6638 §3.2: 1.2 means "delivered to a local schedule
-    inbox"; 3.7 means "no such calendar user" (which we use for any
-    non-local address since iMIP isn't implemented). Storage failures
-    propagate.
+    Tries local-inbox delivery first (success → ``2.0;Success``). For
+    addresses that don't belong to a local principal, falls through to
+    iMIP if the backend is configured with a transport: success →
+    ``1.1;Sent``, transport failure → ``5.1;Service unavailable``,
+    and ``--imip-send=off`` → ``3.7;Invalid calendar user`` (the
+    pre-iMIP behaviour). *originator* is the originating
+    organiser/attendee address used for the iMIP ``Reply-To:`` header.
+    Storage failures from local delivery propagate.
     """
     delivered = await scheduling.deliver_to_inbox(
         backend, address, message, name_hint=None
     )
     if delivered:
         return itip.REQUEST_STATUS_SUCCESS
-    return itip.REQUEST_STATUS_INVALID_CALENDAR_USER
+    return await _send_via_imip(backend, originator, address, message)
+
+
+async def _send_via_imip(
+    backend: webdav.Backend,
+    originator: str | None,
+    recipient: str,
+    message: Calendar,
+) -> str:
+    """Hand *message* to the configured outbound iMIP transport.
+
+    Returns the SCHEDULE-STATUS code reflecting the outcome. Backends
+    that don't carry iMIP configuration (i.e. anything other than
+    :class:`SingleUserFilesystemBackend`) behave as if iMIP is off.
+    """
+    if not isinstance(backend, SingleUserFilesystemBackend):
+        return itip.REQUEST_STATUS_INVALID_CALENDAR_USER
+    transport = backend.imip_transport
+    sender = backend.imip_from
+    if isinstance(transport, imip_transport_mod.NullTransport):
+        return itip.REQUEST_STATUS_INVALID_CALENDAR_USER
+    if sender is None:
+        logger.warning(
+            "Outbound iMIP enabled but no --smtp-from configured; "
+            "skipping delivery to %s",
+            recipient,
+        )
+        return itip.REQUEST_STATUS_INVALID_CALENDAR_USER
+    email = imip.build_message(
+        message,
+        sender=sender,
+        recipient=_strip_mailto(recipient),
+        reply_to=_strip_mailto(originator) if originator else None,
+        auto_submitted="auto-generated",
+    )
+    try:
+        transport.send(email)
+    except imip_transport_mod.IMIPTransportError as exc:
+        logger.warning("iMIP delivery to %s failed: %s", recipient, exc)
+        return itip.REQUEST_STATUS_TRANSPORT_UNAVAILABLE
+    return itip.REQUEST_STATUS_SENT
+
+
+def _strip_mailto(address: str) -> str:
+    """Return *address* with any ``mailto:`` prefix removed."""
+    if address.lower().startswith("mailto:"):
+        return address[len("mailto:") :]
+    return address
 
 
 def _annotate_schedule_status(cal: Calendar, outcomes: dict[str, str]) -> None:
@@ -2020,6 +2076,8 @@ class SingleUserFilesystemBackend(FilesystemBackend):
         eager_indexing: bool = False,
         autocreate: bool = False,
         show_principals_on_root: bool = True,
+        imip_transport: imip_transport_mod.IMIPTransport | None = None,
+        imip_from: str | None = None,
     ) -> None:
         super().__init__(path)
         self._user_principals: set[str] = set()
@@ -2028,6 +2086,12 @@ class SingleUserFilesystemBackend(FilesystemBackend):
         self.eager_indexing = eager_indexing
         self.autocreate = autocreate
         self.show_principals_on_root = show_principals_on_root
+        self.imip_transport: imip_transport_mod.IMIPTransport = (
+            imip_transport
+            if imip_transport is not None
+            else imip_transport_mod.NullTransport()
+        )
+        self.imip_from = imip_from
         self._open_store = functools.lru_cache(maxsize=16)(self._open_store_uncached)
 
     def _open_store_uncached(self, path: str):
@@ -2514,6 +2578,8 @@ def add_parser(parser):
         help="Pre-populate indexes at startup for faster initial queries.",
     )
 
+    imip_transport_mod.add_arguments(parser)
+
 
 async def main(options, parser):
     if options.dump_dav_xml:
@@ -2536,6 +2602,8 @@ async def main(options, parser):
         paranoid=options.paranoid,
         index_threshold=options.index_threshold,
         eager_indexing=options.eager,
+        imip_transport=imip_transport_mod.from_args(options),
+        imip_from=options.smtp_from,
     )
     backend._mark_as_principal(options.current_user_principal)
 

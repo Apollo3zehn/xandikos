@@ -355,6 +355,10 @@ def add_parser(parser):
     parser.add_argument("--paranoid", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--index-threshold", type=int, help=argparse.SUPPRESS)
 
+    from . import imip_transport
+
+    imip_transport.add_arguments(parser)
+
 
 async def main(options, parser):
     """Main entry point for multi-user mode."""
@@ -371,6 +375,8 @@ async def main(options, parser):
 
     logging.basicConfig(level=loglevel, format="%(message)s")
 
+    from . import imip_transport
+
     backend = MultiUserFilesystemBackend(
         os.path.abspath(options.directory),
         principal_path_prefix=options.principal_path_prefix,
@@ -378,6 +384,8 @@ async def main(options, parser):
         paranoid=options.paranoid,
         index_threshold=options.index_threshold,
         show_principals_on_root=not options.hide_principals,
+        imip_transport=imip_transport.from_args(options),
+        imip_from=options.smtp_from,
     )
 
     if not os.path.isdir(options.directory):

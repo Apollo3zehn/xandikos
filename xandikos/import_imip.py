@@ -83,17 +83,48 @@ async def main(args, parser, data: bytes | None = None):
         data = sys.stdin.buffer.read()
     assert isinstance(data, bytes)
     try:
-        payload = imip.extract_payload_from_bytes(data)
+        message = imip.parse_message(data)
     except imip.InvalidIMIPMessage as exc:
-        logger.error("Invalid iMIP message: %s", exc)
+        logger.error("Could not parse incoming message: %s", exc)
+        return 1
+    msg_id = _describe_message(message)
+    if imip.is_auto_submitted(message):
+        # RFC 3834: don't bounce server-generated iTIP back into the
+        # mailbox it came from. Returns 0 because the Sieve hook
+        # treated this message correctly by handing it to us.
+        logger.info(
+            "Skipping auto-submitted message %s (Auto-Submitted: %s)",
+            msg_id,
+            message.get("Auto-Submitted"),
+        )
+        return 0
+    try:
+        payload = imip.extract_payload(message)
+    except imip.InvalidIMIPMessage as exc:
+        candidates = sorted(imip.calendar_user_addresses_from_message(message))
+        logger.error(
+            "Invalid iMIP payload in %s: %s (recipient headers: %s)",
+            msg_id,
+            exc,
+            ", ".join(candidates) if candidates else "(none)",
+        )
         return 1
 
     if args.server_url or args.principal_url:
-        return await _import_imip_to_server(args, payload)
-    return await _import_imip_to_directory(args, payload)
+        return await _import_imip_to_server(args, payload, msg_id)
+    return await _import_imip_to_directory(args, payload, msg_id)
 
 
-async def _import_imip_to_directory(args, payload) -> int:
+def _describe_message(message) -> str:
+    """Return a short human-readable identifier for *message* for logs."""
+    msg_id = message.get("Message-ID") or "(no Message-ID)"
+    subject = message.get("Subject")
+    if subject:
+        return f"{msg_id} ({subject!r})"
+    return str(msg_id)
+
+
+async def _import_imip_to_directory(args, payload, msg_id: str) -> int:
     from . import web
 
     logger = logging.getLogger(__name__)
@@ -105,7 +136,10 @@ async def _import_imip_to_directory(args, payload) -> int:
     if principal is None:
         if not args.autocreate:
             logger.error(
-                "Principal %s does not exist; pass --autocreate to create it.",
+                "Cannot import %s iMIP %s: principal %s does not exist; "
+                "pass --autocreate to create it.",
+                msg_id,
+                payload.method,
                 principal_path,
             )
             return 1
@@ -113,7 +147,12 @@ async def _import_imip_to_directory(args, payload) -> int:
         principal = backend.get_resource(principal_path)
 
     if not isinstance(principal, web.Principal):
-        logger.error("%s is not a principal.", principal_path)
+        logger.error(
+            "Cannot import %s iMIP %s: %s is not a principal.",
+            msg_id,
+            payload.method,
+            principal_path,
+        )
         return 1
 
     inbox_path = posixpath.join(principal_path, principal.get_schedule_inbox_url())
@@ -123,7 +162,10 @@ async def _import_imip_to_directory(args, payload) -> int:
         inbox = backend.get_resource(inbox_path)
     if not isinstance(inbox, web.ScheduleInbox):
         logger.error(
-            "%s is not a schedule inbox; pass --autocreate or create defaults first.",
+            "Cannot import %s iMIP %s: %s is not a schedule inbox; "
+            "pass --autocreate or create defaults first.",
+            msg_id,
+            payload.method,
             inbox_path,
         )
         return 1
@@ -136,19 +178,26 @@ async def _import_imip_to_directory(args, payload) -> int:
             requester="xandikos import-imip",
         )
     except Exception as exc:
-        logger.error("Unable to import iMIP message: %s", exc)
+        logger.error(
+            "Failed to store %s iMIP %s in %s: %s",
+            msg_id,
+            payload.method,
+            inbox_path,
+            exc,
+        )
         return 1
 
     logger.info(
-        "Imported iMIP %s message into %s/%s.",
+        "Imported iMIP %s message %s into %s/%s.",
         payload.method,
+        msg_id,
         inbox_path.rstrip("/"),
         name,
     )
     return 0
 
 
-async def _import_imip_to_server(args, payload) -> int:
+async def _import_imip_to_server(args, payload, msg_id: str) -> int:
     logger = logging.getLogger(__name__)
     password = _read_password_file(args.password_file)
 

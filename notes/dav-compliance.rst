@@ -206,9 +206,10 @@ DAV Reports
 rfc6638.txt (CalDAV scheduling extensions)
 ------------------------------------------
 
-Implemented for local delivery — see the README for the iMIP gap
-(events with remote attendees are stored but not delivered to the
-remote side over email).
+Implemented. Local attendees are delivered to their schedule-inbox;
+remote attendees can be reached over iMIP (RFC 6047) when
+``--imip-send`` is configured (off by default — see the iMIP
+section below).
 
 DAV Properties
 ^^^^^^^^^^^^^^
@@ -295,11 +296,37 @@ iTIP REQUEST to the new delegate so the meeting appears on their
 calendar. SCHEDULE-STATUS on the delegate ATTENDEE in the user's
 stored copy records the delivery outcome.
 
+iMIP (RFC 6047)
+^^^^^^^^^^^^^^^
+
+Outbound delivery is configurable, off by default. The
+``--imip-send`` switch (or ``XANDIKOS_IMIP_SEND``) selects the
+transport: ``sendmail`` pipes through a local sendmail-compatible
+binary, ``smtp`` connects to a relay (``--smtp-host``,
+``--smtp-port``, ``--smtp-encryption=none|starttls|ssl``,
+``--smtp-user``, ``--smtp-password-file``). The ``From:`` header
+uses the configured server identity (``--smtp-from``); the
+originating organiser/attendee goes in ``Reply-To:``. Each message
+carries ``Auto-Submitted: auto-generated`` so an inbound Sieve hook
+that pipes calendar mail to ``xandikos import-imip`` will skip
+server-generated traffic and not loop. SCHEDULE-STATUS reflects the
+outcome: ``1.1;Sent`` on a successful hand-off,
+``5.1;Service unavailable`` on transport failure, and
+``3.7;Invalid calendar user`` when iMIP is off.
+
+Inbound delivery happens via the ``xandikos import-imip``
+subcommand, which parses an RFC 5322 message from stdin (typically
+piped from a Dovecot Sieve rule) and POSTs the iTIP payload to a
+principal's schedule-inbox.
+
 Not implemented
 ^^^^^^^^^^^^^^^
 
-- iMIP (email-based delivery of iTIP messages, RFC 6047) for
-  attendees that aren't local principals.
+- iMIP methods other than REQUEST, REPLY, and CANCEL (PUBLISH,
+  ADD, REFRESH, COUNTER, DECLINECOUNTER).
+- An outbound queue with retries — transport failures surface as
+  ``SCHEDULE-STATUS=5.1`` and the operator is expected to retry
+  by re-PUTting the event with ``SCHEDULE-FORCE-SEND=REQUEST``.
 
 rfc6764.txt (Locating groupware services)
 -----------------------------------------

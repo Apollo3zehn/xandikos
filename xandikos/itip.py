@@ -42,6 +42,10 @@ REQUEST_STATUS_SUCCESS = "2.0;Success"
 REQUEST_STATUS_INVALID_CALENDAR_USER = "3.7;Invalid calendar user"
 REQUEST_STATUS_NO_AUTHORITY = "3.8;No authority"
 REQUEST_STATUS_SERVICE_UNAVAILABLE = "5.0;Service unavailable"
+# RFC 6638 §3.2 SCHEDULE-STATUS codes: 1.1 marks a message handed to an
+# external transport (iMIP), 5.1 marks a transport-side failure.
+REQUEST_STATUS_SENT = "1.1;Sent"
+REQUEST_STATUS_TRANSPORT_UNAVAILABLE = "5.1;Service unavailable"
 
 
 # Properties whose values participate in iTIP scheduling. The schedule-tag

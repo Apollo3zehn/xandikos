@@ -184,6 +184,66 @@ class BuildMessageTests(unittest.TestCase):
         with self.assertRaises(imip.InvalidIMIPMessage):
             imip.build_message(calendar, "alice@example.com", "bob@example.com")
 
+    def test_build_message_reply_to_and_auto_submitted(self):
+        calendar = Calendar.from_ical(REQUEST)
+        msg = imip.build_message(
+            calendar,
+            "calendar@server.example",
+            "bob@example.com",
+            reply_to="alice@example.com",
+            auto_submitted="auto-generated",
+        )
+
+        self.assertEqual("calendar@server.example", msg["From"])
+        self.assertEqual("alice@example.com", msg["Reply-To"])
+        self.assertEqual("auto-generated", msg["Auto-Submitted"])
+
+    def test_round_trip_through_extract_payload(self):
+        # build_message → bytes → parse_message → extract_payload
+        # round-trip preserves the iCalendar content and all the
+        # routing-relevant headers. Catches MIME-parameter or charset
+        # drift between the writer and the reader.
+        original = Calendar.from_ical(REQUEST)
+        msg = imip.build_message(
+            original,
+            "calendar@server.example",
+            "bob@example.com",
+            reply_to="alice@example.com",
+            auto_submitted="auto-generated",
+        )
+        wire = msg.as_bytes()
+
+        parsed = imip.parse_message(wire)
+        self.assertEqual("calendar@server.example", parsed["From"])
+        self.assertEqual("bob@example.com", parsed["To"])
+        self.assertEqual("alice@example.com", parsed["Reply-To"])
+        self.assertEqual("auto-generated", parsed["Auto-Submitted"])
+
+        payload = imip.extract_payload(parsed)
+        self.assertEqual("REQUEST", payload.method)
+        self.assertEqual(original.to_ical(), payload.calendar.to_ical())
+
+
+class IsAutoSubmittedTests(unittest.TestCase):
+    def test_no_header(self):
+        msg = EmailMessage()
+        self.assertFalse(imip.is_auto_submitted(msg))
+
+    def test_no_keyword(self):
+        msg = EmailMessage()
+        msg["Auto-Submitted"] = "no"
+        self.assertFalse(imip.is_auto_submitted(msg))
+
+    def test_auto_generated(self):
+        msg = EmailMessage()
+        msg["Auto-Submitted"] = "auto-generated"
+        self.assertTrue(imip.is_auto_submitted(msg))
+
+    def test_auto_replied_with_parameters(self):
+        msg = EmailMessage()
+        msg["Auto-Submitted"] = "auto-replied; type=vacation"
+        self.assertTrue(imip.is_auto_submitted(msg))
+
 
 if __name__ == "__main__":
     unittest.main()
