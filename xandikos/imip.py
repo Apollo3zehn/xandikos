@@ -153,12 +153,20 @@ def build_message(
     *,
     subject: str | None = None,
     prodid: str | None = None,
+    reply_to: str | None = None,
+    auto_submitted: str | None = None,
 ) -> EmailMessage:
     """Build a MIME iMIP email for *calendar*.
 
     The resulting message contains a ``text/calendar`` body with a ``method``
     parameter as required by RFC 6047. It does not send the email; SMTP
     transport code can use this as its serialization boundary.
+
+    *reply_to* sets the ``Reply-To:`` header (RFC 5322); typically the
+    originating organiser/attendee while *sender* is the server identity.
+    *auto_submitted* sets the ``Auto-Submitted:`` header (RFC 3834);
+    pass ``"auto-generated"`` for server-emitted iTIP traffic so that
+    receiving Sieve/iMIP loops can break the cycle.
     """
     method = _calendar_method(calendar)
     calendar_data = calendar.to_ical()
@@ -166,8 +174,12 @@ def build_message(
     msg = EmailMessage(policy=policy.default)
     msg["From"] = sender
     msg["To"] = recipient
+    if reply_to is not None:
+        msg["Reply-To"] = reply_to
     msg["Subject"] = subject or _default_subject(calendar, method)
     msg["Message-ID"] = make_msgid()
+    if auto_submitted is not None:
+        msg["Auto-Submitted"] = auto_submitted
     if prodid is not None:
         msg["X-Xandikos-Prodid"] = prodid
     msg.set_content(
