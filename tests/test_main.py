@@ -336,6 +336,28 @@ class ImportIMIPTests(unittest.TestCase):
 
         self.assertEqual(1, result)
 
+    def test_import_imip_logs_message_id_and_recipients_on_payload_error(self):
+        # A well-formed RFC 5322 message with no text/calendar part —
+        # parsing succeeds, payload extraction fails. The log line
+        # should carry the Message-ID and the candidate recipient
+        # addresses so an admin can debug the Sieve drop.
+        msg = EmailMessage()
+        msg["From"] = "Alice <alice@example.com>"
+        msg["To"] = "Bob <bob@example.com>"
+        msg["Cc"] = "carol@example.com"
+        msg["Message-ID"] = "<broken@server.example>"
+        msg["Subject"] = "I forgot the calendar attachment"
+        msg.set_content("hello")
+        with self.assertLogs("xandikos.import_imip", level=logging.ERROR) as logs:
+            result = asyncio.run(
+                import_imip.main(self._args(autocreate=True), None, data=msg.as_bytes())
+            )
+        self.assertEqual(1, result)
+        joined = "\n".join(logs.output)
+        self.assertIn("<broken@server.example>", joined)
+        self.assertIn("mailto:bob@example.com", joined)
+        self.assertIn("mailto:carol@example.com", joined)
+
     def test_import_imip_skips_auto_submitted_message(self):
         # RFC 3834: a server's own outbound iTIP carries
         # Auto-Submitted: auto-generated. import-imip must skip it
