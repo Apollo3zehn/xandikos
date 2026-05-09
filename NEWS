@@ -1,3 +1,14 @@
+0.4.0	2026-05-09
+
+ * Support scheduling (iTIP/iMIP). (Jelmer Vernooĳ)
+
+ * Add experimental multi-user mode with automatic principal creation and
+   path-based authorization. (Jelmer Vernooĳ)
+
+ * Fix OverflowError on open-start time-range queries. (Jelmer Vernooĳ)
+
+ * Make GitStore._scan_uids thread-safe. (Jelmer Vernooĳ)
+
 0.3.7	2026-04-11
 
  * Cache etag computation in VdirStore using stat metadata.
