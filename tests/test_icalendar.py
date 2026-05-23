@@ -174,6 +174,31 @@ class ExtractCalendarUIDTests(unittest.TestCase):
         self.assertEqual([], list(validate_calendar(fi.calendar, strict=False)))
         self.assertRaises(KeyError, fi.get_uid)
 
+    def test_rrule_without_dtstart(self):
+        # RFC 5545 3.8.5.3: RRULE's recurrence set is anchored on DTSTART, so
+        # a component with RRULE but no DTSTART is malformed. DTSTART is
+        # otherwise optional on VTODO, so this is not caught by the
+        # required-fields check.
+        cal_data = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VTODO
+UID:rrule-no-dtstart@example.com
+DTSTAMP:20231001T124832Z
+RRULE:FREQ=DAILY
+SUMMARY:recurring task with no anchor
+END:VTODO
+END:VCALENDAR
+"""
+        fi = ICalendarFile([cal_data], "text/calendar")
+        # Non-strict validation accepts it (preserving existing behavior).
+        fi.validate()
+        self.assertEqual([], list(validate_calendar(fi.calendar, strict=False)))
+        self.assertEqual(
+            ["RRULE in VTODO requires DTSTART"],
+            list(validate_calendar(fi.calendar, strict=True)),
+        )
+
     def test_invalid_character(self):
         fi = ICalendarFile([EXAMPLE_VCALENDAR_INVALID_CHAR], "text/calendar")
         self.assertRaises(InvalidFileContents, fi.validate)

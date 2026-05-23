@@ -139,6 +139,11 @@ def validate_component(comp, strict=False):
                 comp[required]
             except KeyError:
                 yield f"Missing required field {required}"
+        if "RRULE" in comp and "DTSTART" not in comp:
+            # RFC 5545 3.8.5.3: the recurrence set is generated from DTSTART
+            # together with RRULE/RDATE/EXDATE, so RRULE without DTSTART has
+            # no defined meaning.
+            yield f"RRULE in {comp.name} requires DTSTART"
     for subcomp in comp.subcomponents:
         yield from validate_component(subcomp, strict=strict)
 
