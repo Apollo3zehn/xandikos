@@ -805,12 +805,23 @@ class ComponentTimeRangeMatcher:
         rrule_values = indexes.get("P=RRULE", [])
         dtstart_values = indexes.get("P=DTSTART", [])
 
-        if (
-            not rrule_values
-            or not dtstart_values
-            or not rrule_values[0]
-            or not dtstart_values[0]
-        ):
+        if not rrule_values or not rrule_values[0]:
+            return False
+        if not dtstart_values or not dtstart_values[0]:
+            # RRULE without DTSTART is malformed (RFC 5545 3.8.5.3). Warn so
+            # operators can spot corrupt items; skip rather than crash.
+            uid_values = indexes.get("P=UID", [])
+            uid = (
+                uid_values[0].decode("utf-8", "replace")
+                if uid_values and uid_values[0] and isinstance(uid_values[0], bytes)
+                else "unknown"
+            )
+            logger.warning(
+                "Skipping RRULE expansion in time-range filter for %s (UID=%s): "
+                "missing DTSTART",
+                context or "<unknown>",
+                uid,
+            )
             return False
 
         def decode_bytes(value: bytes, field_name: str) -> str:
@@ -1968,6 +1979,16 @@ def _expand_rrule_component(
     existing: dict[str | date | datetime, Component] = {},
 ) -> Iterable[Component]:
     if "RRULE" not in incomp:
+        return
+    if "DTSTART" not in incomp:
+        # RFC 5545 anchors the recurrence set on DTSTART (3.8.5.3). Without it
+        # there's nothing to expand; skip and warn so corrupt stored items
+        # don't 500 the request.
+        logger.warning(
+            "Skipping RRULE expansion for %s (UID=%s): missing DTSTART",
+            incomp.name,
+            incomp.get("UID", "unknown"),
+        )
         return
 
     rs = rruleset_from_comp(incomp)

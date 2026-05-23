@@ -663,6 +663,57 @@ class CalendarFilterTests(unittest.TestCase):
         )
         self.assertTrue(filter.check("file", self.cal))
 
+    def test_filter_rrule_without_dtstart(self):
+        # A stored VTODO with RRULE but no DTSTART (RFC 5545 3.8.5.3 makes it
+        # malformed) must not crash either filter path. Both warn and skip.
+        test_ical = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VTODO
+UID:recurring-todo-no-dtstart@example.com
+COMPLETED:20231001T105204Z
+DTSTAMP:20231001T124832Z
+RRULE:FREQ=DAILY
+STATUS:COMPLETED
+SUMMARY:no anchor
+END:VTODO
+END:VCALENDAR"""
+
+        cal_file = ICalendarFile([test_ical], "text/calendar")
+        filter_obj = CalendarFilter(ZoneInfo("UTC"))
+        filter_obj.filter_subcomponent("VCALENDAR").filter_subcomponent(
+            "VTODO"
+        ).filter_time_range(
+            start=datetime(2026, 5, 14, tzinfo=timezone.utc),
+            end=datetime(2026, 5, 21, tzinfo=timezone.utc),
+        )
+
+        # Non-indexed path: expand_calendar_rrule skips the bad component.
+        with self.assertLogs("xandikos", level="WARNING") as cm:
+            self.assertFalse(filter_obj.check("bad.ics", cal_file))
+        self.assertTrue(any("missing DTSTART" in m for m in cm.output), cm.output)
+
+        # Indexed path: RRULE present, DTSTART absent.
+        with self.assertLogs("xandikos", level="WARNING") as cm:
+            self.assertFalse(
+                filter_obj.check_from_indexes(
+                    "bad.ics",
+                    {
+                        "C=VCALENDAR/C=VTODO/P=DTSTART": [],
+                        "C=VCALENDAR/C=VTODO/P=DUE": [],
+                        "C=VCALENDAR/C=VTODO/P=DURATION": [],
+                        "C=VCALENDAR/C=VTODO/P=CREATED": [],
+                        "C=VCALENDAR/C=VTODO/P=COMPLETED": [b"20231001T105204Z"],
+                        "C=VCALENDAR/C=VTODO/P=RRULE": [b"FREQ=DAILY"],
+                        "C=VCALENDAR/C=VTODO": [True],
+                    },
+                )
+            )
+        self.assertTrue(
+            any("missing DTSTART" in m and "bad.ics" in m for m in cm.output),
+            cm.output,
+        )
+
     def test_rrule_index_based_filtering_exact_match(self):
         """Test that rrule filtering works correctly when one recurrence exactly matches the time range."""
         self.cal = ICalendarFile([EXAMPLE_VCALENDAR_RRULE], "text/calendar")
@@ -1884,6 +1935,47 @@ END:VCALENDAR"""
         self.assertEqual(
             todos[0]["DUE"].dt,
             datetime(2000, 2, 12, 13, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_skip_rrule_without_dtstart(self):
+        # A VTODO with RRULE but no DTSTART is malformed (RFC 5545 3.8.5.3).
+        # Expansion must not crash; the bad component is skipped with a
+        # warning, and well-formed components in the same calendar are kept.
+        from icalendar import Calendar
+
+        test_ical = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VTODO
+UID:bad-recurring-todo@example.com
+COMPLETED:20231001T105204Z
+DTSTAMP:20231001T124832Z
+RRULE:FREQ=DAILY
+STATUS:COMPLETED
+SUMMARY:no anchor
+END:VTODO
+BEGIN:VEVENT
+UID:good-event@example.com
+DTSTART:20240101T100000Z
+DTEND:20240101T110000Z
+SUMMARY:fine
+END:VEVENT
+END:VCALENDAR"""
+
+        cal = Calendar.from_ical(test_ical)
+        with self.assertLogs("xandikos", level="WARNING") as cm:
+            expanded = expand_calendar_rrule(
+                cal,
+                datetime(2024, 1, 1, tzinfo=timezone.utc),
+                datetime(2024, 1, 31, tzinfo=timezone.utc),
+            )
+        self.assertEqual([c.name for c in expanded.subcomponents], ["VEVENT"])
+        self.assertTrue(
+            any(
+                "missing DTSTART" in m and "bad-recurring-todo@example.com" in m
+                for m in cm.output
+            ),
+            cm.output,
         )
 
     def test_expand_recurrence_id_utc_aware(self):
