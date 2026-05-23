@@ -26,7 +26,7 @@ are always strong, and should be returned without wrapping quotes.
 from logging import getLogger
 import mimetypes
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import Sequence, Iterator
 from typing import Optional
 
 from .index import AutoIndexManager, IndexDict, IndexKey, IndexValueIterator
@@ -67,10 +67,10 @@ class InvalidCTag(Exception):
 class File:
     """A file type handler."""
 
-    content: Iterable[bytes]
+    content: Sequence[bytes]
     content_type: str
 
-    def __init__(self, content: Iterable[bytes], content_type: str) -> None:
+    def __init__(self, content: Sequence[bytes], content_type: str) -> None:
         self.content = content
         self.content_type = content_type
 
@@ -80,7 +80,7 @@ class File:
         :raise InvalidFileContents: Raised if a file is not valid
         """
 
-    def normalized(self) -> Iterable[bytes]:
+    def normalized(self) -> Sequence[bytes]:
         """Return a normalized version of the file."""
         return self.content
 
@@ -138,7 +138,7 @@ class File:
         """
         raise NotImplementedError(self._get_index)
 
-    def get_indexes(self, keys: Iterable[IndexKey]) -> IndexDict:
+    def get_indexes(self, keys: Sequence[IndexKey]) -> IndexDict:
         """Obtain indexes for this file.
 
         Args:
@@ -188,7 +188,7 @@ class Filter:
 
 
 def open_by_content_type(
-    content: Iterable[bytes], content_type: str, extra_file_handlers
+    content: Sequence[bytes], content_type: str, extra_file_handlers
 ) -> File:
     """Open a file based on content type.
 
@@ -203,7 +203,7 @@ def open_by_content_type(
 
 
 def open_by_extension(
-    content: Iterable[bytes],
+    content: Sequence[bytes],
     name: str,
     extra_file_handlers: dict[str, type[File]],
 ) -> File:
@@ -451,7 +451,7 @@ class Store:
                 extra_file_handlers=self.extra_file_handlers,
             )
 
-    def _get_raw(self, name: str, etag: str | None = None) -> Iterable[bytes]:
+    def _get_raw(self, name: str, etag: str | None = None) -> Sequence[bytes]:
         """Get the raw contents of an object.
 
         Args:
@@ -495,7 +495,7 @@ class Store:
         self,
         name: str,
         content_type: str,
-        data: Iterable[bytes],
+        data: Sequence[bytes],
         message: str | None = None,
         replace_etag: str | None = None,
         remote_user: str | None = None,

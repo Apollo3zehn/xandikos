@@ -20,7 +20,7 @@
 """Memory store implementation."""
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Sequence
 
 from . import (
     MIMETYPES,
@@ -55,7 +55,7 @@ class MemoryStore(Store):
         self._etag_counter += 1
         return f"etag-{self._etag_counter:06d}"
 
-    def _get_raw(self, name: str, etag: str | None = None) -> Iterable[bytes]:
+    def _get_raw(self, name: str, etag: str | None = None) -> Sequence[bytes]:
         """Get raw contents of an item."""
         if name not in self._items:
             raise KeyError(name)
@@ -94,7 +94,7 @@ class MemoryStore(Store):
         self,
         name: str,
         content_type: str,
-        data: Iterable[bytes],
+        data: Sequence[bytes],
         message: str | None = None,
         replace_etag: str | None = None,
         remote_user: str | None = None,

@@ -29,8 +29,7 @@ import shutil
 import stat
 import uuid
 from io import BytesIO, StringIO
-from typing import cast
-from collections.abc import Iterable
+from collections.abc import Sequence
 
 import dulwich.repo
 from dulwich.file import FileLocked
@@ -325,7 +324,7 @@ class GitStore(Store):
     def _import_one(
         self,
         name: str,
-        data: Iterable[bytes],
+        data: Sequence[bytes],
         message: str,
     ):
         raise NotImplementedError(self._import_one)
@@ -383,7 +382,7 @@ class GitStore(Store):
         self,
         name: str,
         content_type: str,
-        data: Iterable[bytes],
+        data: Sequence[bytes],
         message: str | None = None,
         replace_etag: str | None = None,
         remote_user: str | None = None,
@@ -782,7 +781,7 @@ class BareGitStore(GitStore):
     def _import_one(
         self,
         name: str,
-        data: Iterable[bytes],
+        data: Sequence[bytes],
         message: str,
     ) -> bytes:
         """Import a single object.
@@ -794,7 +793,7 @@ class BareGitStore(GitStore):
         Returns: etag
         """
         b = Blob()
-        b.chunked = data
+        b.chunked = list(data)
         tree = self._get_current_tree()
         old_tree_id = tree.id
         name_enc = name.encode(DEFAULT_ENCODING)
@@ -927,7 +926,7 @@ class TreeGitStore(GitStore):
     def _import_one(
         self,
         name: str,
-        data: Iterable[bytes],
+        data: Sequence[bytes],
         message: str,
     ) -> bytes:
         """Import a single object.
@@ -993,8 +992,7 @@ class TreeGitStore(GitStore):
         p = os.path.join(self.repo.path, name)
         try:
             with open(p, "rb") as f:
-                # cast to Blob, because on dulwich < 0.24.0 Blob.from_string returns ShaFile
-                current_blob = cast(Blob, Blob.from_string(f.read()))
+                current_blob = Blob.from_string(f.read())
         except FileNotFoundError as exc:
             raise NoSuchItem(name) from exc
         except IsADirectoryError as exc:
