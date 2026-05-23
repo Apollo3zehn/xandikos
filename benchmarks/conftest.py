@@ -33,17 +33,40 @@ Usage:
     pytest-benchmark compare v0.3.4 v0.3.5 master --sort=fullname
 """
 
+import atexit
 import inspect
 import os
 import shutil
 import tempfile
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
-from xandikos.icalendar import ICalendarFile
-from xandikos.store.git import BareGitStore, TreeGitStore
-from xandikos.store.memory import MemoryStore
+def _isolate_git_config() -> None:
+    """Prevent the developer's gitconfig from leaking into benchmarks.
+
+    Mirrors the isolation done in ``tests/conftest.py`` so benchmark runs
+    are not affected by the host's ``~/.gitconfig`` or ``/etc/gitconfig``.
+    """
+    fd, path = tempfile.mkstemp(prefix="xandikos-bench-gitconfig-")
+    with os.fdopen(fd, "w") as f:
+        f.write("[user]\n\tname = Xandikos Bench\n\temail = bench@xandikos.invalid\n")
+    atexit.register(lambda: os.path.exists(path) and os.unlink(path))
+
+    os.environ["GIT_CONFIG_GLOBAL"] = path
+    os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
+    os.environ["GIT_AUTHOR_NAME"] = "Xandikos Bench"
+    os.environ["GIT_AUTHOR_EMAIL"] = "bench@xandikos.invalid"
+    os.environ["GIT_COMMITTER_NAME"] = "Xandikos Bench"
+    os.environ["GIT_COMMITTER_EMAIL"] = "bench@xandikos.invalid"
+
+
+_isolate_git_config()
+
+import pytest  # noqa: E402
+
+from xandikos.icalendar import ICalendarFile  # noqa: E402
+from xandikos.store.git import BareGitStore, TreeGitStore  # noqa: E402
+from xandikos.store.memory import MemoryStore  # noqa: E402
 
 
 # Number of items in collections used for benchmarks.

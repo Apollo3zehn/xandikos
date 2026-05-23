@@ -20,6 +20,7 @@
 """Tests for xandikos.imip_listen (LMTP listener for inbound iMIP)."""
 
 import asyncio
+import importlib.util
 import shutil
 import sys
 import tempfile
@@ -29,6 +30,8 @@ from types import SimpleNamespace
 
 from xandikos import imip_listen
 from xandikos.web import SingleUserFilesystemBackend
+
+_HAS_AIOSMTPD = importlib.util.find_spec("aiosmtpd") is not None
 
 
 REQUEST = b"""\
@@ -160,6 +163,7 @@ class SocketModeTests(unittest.TestCase):
 
 
 @unittest.skipIf(sys.platform == "win32", "Unix sockets are not supported on Windows")
+@unittest.skipUnless(_HAS_AIOSMTPD, "aiosmtpd is not installed")
 class LMTPEndToEndTests(unittest.IsolatedAsyncioTestCase):
     """Drive the listener over a real Unix socket using smtplib.LMTP."""
 
