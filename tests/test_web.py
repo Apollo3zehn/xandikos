@@ -318,6 +318,211 @@ END:VCALENDAR"""
         retrieved2_cal = ICalendar.from_ical(retrieved2)
         self.assertEqual(original2_cal.to_ical(), retrieved2_cal.to_ical())
 
+    def test_render_html_default(self):
+        """A text/html Accept renders HTML, not the ICS export."""
+        body, _length, _etag, content_type, languages = asyncio.run(
+            self.cal.render(
+                "http://example.com/c/",
+                [("text/html", {})],
+                ["en"],
+            )
+        )
+        self.assertEqual("text/html; encoding=utf-8", content_type)
+        self.assertEqual(["en-UK"], languages)
+
+    def test_render_ics_via_accept(self):
+        """A request with only text/calendar in Accept returns ICS."""
+        self.store.import_one("foo.ics", "text/calendar", [EXAMPLE_VCALENDAR1])
+        body, length, etag, content_type, languages = asyncio.run(
+            self.cal.render(
+                "http://example.com/c/",
+                [("text/calendar", {})],
+                ["en"],
+            )
+        )
+        self.assertEqual("text/calendar; charset=utf-8", content_type)
+        self.assertIsNone(languages)
+        ics = b"".join(body)
+        self.assertEqual(length, len(ics))
+        self.assertEqual(asyncio.run(self.cal.get_etag()), etag)
+        from icalendar.cal import Calendar as ICalendar
+
+        merged = ICalendar.from_ical(ics)
+        self.assertEqual("VCALENDAR", merged.name)
+        self.assertEqual("2.0", str(merged["VERSION"]))
+        self.assertEqual("-//Jelmer Vernooĳ//Xandikos//EN", str(merged["PRODID"]))
+        self.assertEqual(["VTODO"], [c.name for c in merged.subcomponents])
+        self.assertEqual(
+            "bdc22720-b9e1-42c9-89c2-a85405d8fbff",
+            str(merged.subcomponents[0]["UID"]),
+        )
+
+    def test_render_browser_accept_returns_html(self):
+        """Accept: */* (browser default) falls through to HTML."""
+        self.store.import_one("foo.ics", "text/calendar", [EXAMPLE_VCALENDAR1])
+        _body, _length, _etag, content_type, _languages = asyncio.run(
+            self.cal.render(
+                "http://example.com/c/",
+                [("text/html", {}), ("*/*", {"q": "0.8"})],
+                ["en"],
+            )
+        )
+        self.assertEqual("text/html; encoding=utf-8", content_type)
+
+    def test_render_ics_via_export_query(self):
+        """The ?export query forces ICS even from a browser-style Accept."""
+        self.store.import_one("foo.ics", "text/calendar", [EXAMPLE_VCALENDAR1])
+        body, _length, _etag, content_type, _languages = asyncio.run(
+            self.cal.render(
+                "http://example.com/c/?export",
+                [("text/html", {}), ("*/*", {"q": "0.8"})],
+                ["en"],
+            )
+        )
+        self.assertEqual("text/calendar; charset=utf-8", content_type)
+        from icalendar.cal import Calendar as ICalendar
+
+        merged = ICalendar.from_ical(b"".join(body))
+        self.assertEqual(["VTODO"], [c.name for c in merged.subcomponents])
+
+    def test_render_ics_merges_multiple_members(self):
+        """Multiple ICS members are merged into a single VCALENDAR."""
+        second = b"""BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//Test//Test//EN\r
+BEGIN:VEVENT\r
+UID:second-event@example.com\r
+DTSTAMP:20260101T120000Z\r
+DTSTART:20260601T100000Z\r
+DTEND:20260601T110000Z\r
+SUMMARY:Another event\r
+END:VEVENT\r
+END:VCALENDAR\r
+"""
+        self.store.import_one("foo.ics", "text/calendar", [EXAMPLE_VCALENDAR1])
+        self.store.import_one("bar.ics", "text/calendar", [second])
+
+        body, _length, _etag, _ct, _languages = asyncio.run(
+            self.cal.render(
+                "http://example.com/c/?export",
+                [("*/*", {})],
+                ["en"],
+            )
+        )
+        from icalendar.cal import Calendar as ICalendar
+
+        merged = ICalendar.from_ical(b"".join(body))
+        names = sorted(c.name for c in merged.subcomponents)
+        self.assertEqual(["VEVENT", "VTODO"], names)
+        uids = sorted(str(c["UID"]) for c in merged.subcomponents)
+        self.assertEqual(
+            [
+                "bdc22720-b9e1-42c9-89c2-a85405d8fbff",
+                "second-event@example.com",
+            ],
+            uids,
+        )
+
+    def test_render_ics_dedupes_vtimezones(self):
+        """VTIMEZONE components with the same TZID appear once in the export."""
+        tz_body = b"""BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//Test//Test//EN\r
+BEGIN:VTIMEZONE\r
+TZID:Europe/Amsterdam\r
+BEGIN:STANDARD\r
+DTSTART:19701025T030000\r
+TZOFFSETFROM:+0200\r
+TZOFFSETTO:+0100\r
+END:STANDARD\r
+END:VTIMEZONE\r
+BEGIN:VEVENT\r
+UID:tz-event-1@example.com\r
+DTSTAMP:20260101T120000Z\r
+DTSTART;TZID=Europe/Amsterdam:20260601T100000\r
+DTEND;TZID=Europe/Amsterdam:20260601T110000\r
+SUMMARY:TZ One\r
+END:VEVENT\r
+END:VCALENDAR\r
+"""
+        tz_body2 = b"""BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//Test//Test//EN\r
+BEGIN:VTIMEZONE\r
+TZID:Europe/Amsterdam\r
+BEGIN:STANDARD\r
+DTSTART:19701025T030000\r
+TZOFFSETFROM:+0200\r
+TZOFFSETTO:+0100\r
+END:STANDARD\r
+END:VTIMEZONE\r
+BEGIN:VEVENT\r
+UID:tz-event-2@example.com\r
+DTSTAMP:20260101T120000Z\r
+DTSTART;TZID=Europe/Amsterdam:20260602T100000\r
+DTEND;TZID=Europe/Amsterdam:20260602T110000\r
+SUMMARY:TZ Two\r
+END:VEVENT\r
+END:VCALENDAR\r
+"""
+        self.store.import_one("one.ics", "text/calendar", [tz_body])
+        self.store.import_one("two.ics", "text/calendar", [tz_body2])
+
+        body, _length, _etag, _ct, _languages = asyncio.run(
+            self.cal.render(
+                "http://example.com/c/?export",
+                [("*/*", {})],
+                ["en"],
+            )
+        )
+        from icalendar.cal import Calendar as ICalendar
+
+        merged = ICalendar.from_ical(b"".join(body))
+        vtimezones = [c for c in merged.subcomponents if c.name == "VTIMEZONE"]
+        self.assertEqual(1, len(vtimezones))
+        self.assertEqual("Europe/Amsterdam", str(vtimezones[0]["TZID"]))
+        vevents = [c for c in merged.subcomponents if c.name == "VEVENT"]
+        self.assertEqual(2, len(vevents))
+        self.assertEqual(
+            ["tz-event-1@example.com", "tz-event-2@example.com"],
+            sorted(str(c["UID"]) for c in vevents),
+        )
+
+    def test_render_ics_includes_displayname_and_description(self):
+        """The merged feed exposes the calendar name and description."""
+        self.cal.set_displayname("Holidays")
+        self.cal.set_calendar_description("Public holidays")
+        self.store.import_one("foo.ics", "text/calendar", [EXAMPLE_VCALENDAR1])
+
+        body, _length, _etag, _ct, _languages = asyncio.run(
+            self.cal.render(
+                "http://example.com/c/?export",
+                [("*/*", {})],
+                ["en"],
+            )
+        )
+        from icalendar.cal import Calendar as ICalendar
+
+        merged = ICalendar.from_ical(b"".join(body))
+        self.assertEqual("Holidays", str(merged["X-WR-CALNAME"]))
+        self.assertEqual("Public holidays", str(merged["X-WR-CALDESC"]))
+
+    def test_render_ics_empty_collection(self):
+        """An empty calendar still produces a valid VCALENDAR wrapper."""
+        body, _length, _etag, content_type, _languages = asyncio.run(
+            self.cal.render(
+                "http://example.com/c/?export",
+                [("*/*", {})],
+                ["en"],
+            )
+        )
+        self.assertEqual("text/calendar; charset=utf-8", content_type)
+        from icalendar.cal import Calendar as ICalendar
+
+        merged = ICalendar.from_ical(b"".join(body))
+        self.assertEqual("VCALENDAR", merged.name)
+        self.assertEqual([], list(merged.subcomponents))
+
 
 class CalendarCollectionMigrationTests(unittest.TestCase):
     """Test migration from .xandikos file to .xandikos/ directory structure."""

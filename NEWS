@@ -1,3 +1,10 @@
+0.4.1	UNRELEASED
+
+ * Allow exporting a calendar collection as a single iCalendar feed.
+   Issue a GET with ``Accept: text/calendar`` or append ``?export`` to the
+   collection URL to get one merged ``.ics`` file suitable for consumers
+   such as Google Calendar's "Add by URL". (Jelmer Vernooĳ, #164)
+
 0.4.0	2026-05-09
 
  * Support scheduling (iTIP/iMIP). (Jelmer Vernooĳ)
