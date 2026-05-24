@@ -57,6 +57,7 @@ from xandikos import (
     scheduling,
     sync,
     timezones,
+    webcal,
     webdav,
     xmpp,
 )
@@ -1047,6 +1048,58 @@ class CalendarCollection(StoreBasedCollection, caldav.Calendar):
         for name, file, etag in self.store.iter_with_filter(filter=filter):
             resource = self._get_resource(name, file.content_type, etag, file=file)
             yield (name, resource)
+
+    async def render(
+        self, self_url, accepted_content_types, accepted_content_languages
+    ):
+        query = urllib.parse.urlparse(self_url).query
+        export_requested = "export" in urllib.parse.parse_qs(
+            query, keep_blank_values=True
+        )
+        if export_requested:
+            serve_ics = True
+        else:
+            # Only serve text/calendar when the client explicitly asked
+            # for it (e.g. Accept: text/calendar). Fall back to HTML for
+            # */* so browsers keep getting the human-readable view.
+            try:
+                content_types = webdav.pick_content_types(
+                    accepted_content_types, ["text/html"]
+                )
+            except webdav.NotAcceptableError:
+                content_types = webdav.pick_content_types(
+                    accepted_content_types, ["text/calendar"]
+                )
+            serve_ics = content_types == ["text/calendar"]
+        if serve_ics:
+            try:
+                displayname = self.get_displayname()
+            except KeyError:
+                displayname = None
+            try:
+                description = self.get_calendar_description()
+            except (KeyError, NotImplementedError):
+                description = None
+            try:
+                timezone = self.get_calendar_timezone()
+            except (KeyError, NotImplementedError):
+                timezone = None
+            body = webcal.merge_store_calendar(
+                self.store,
+                displayname=displayname,
+                description=description,
+                timezone=timezone,
+            ).to_ical()
+            return (
+                [body],
+                len(body),
+                await self.get_etag(),
+                "text/calendar; charset=utf-8",
+                None,
+            )
+        return await super().render(
+            self_url, accepted_content_types, accepted_content_languages
+        )
 
     def get_xmpp_heartbeat(self):
         # TODO

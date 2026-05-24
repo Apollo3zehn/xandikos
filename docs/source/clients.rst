@@ -287,3 +287,24 @@ CalendarSync is another Android CalDAV sync adapter.
    - Username and password
 
 5. The app will discover and sync available calendars
+
+Read-only ICS export
+--------------------
+
+Some calendar applications cannot speak CalDAV but can subscribe to a calendar
+by URL — for example Google Calendar's "Add Calendar → From URL". For these
+clients Xandikos can serve a calendar collection as a single merged iCalendar
+file. The export is read-only; the subscribing client cannot create or modify
+events.
+
+There are two ways to request the export:
+
+- Send a request with ``Accept: text/calendar``. Xandikos negotiates the
+  response and returns one ``.ics`` file containing every event in the
+  collection.
+- Append ``?export`` to the collection URL. This forces the iCalendar response
+  even when the client sends a browser-style ``Accept`` header. Use this form
+  when pasting a URL into a subscription field.
+
+For example, a Google Calendar subscription URL might look like
+``https://dav.example.com/user/calendars/calendar/?export``.
