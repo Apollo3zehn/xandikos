@@ -146,7 +146,9 @@ async def _store_payload(
             exc,
         )
         return None
-    return f"{inbox_path.rstrip('/')}/{name}"
+    stored_path = f"{inbox_path.rstrip('/')}/{name}"
+    logger.info("Stored %s iMIP %s in %s", msg_id, payload.method, stored_path)
+    return stored_path
 
 
 class IMIPListenConfigError(Exception):
