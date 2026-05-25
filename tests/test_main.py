@@ -277,7 +277,7 @@ class ImportIMIPTests(unittest.TestCase):
                 "--password-file",
                 "/run/secrets/xandikos-password",
                 "--unix-socket",
-                "/run/xandikos.sock",
+                "/run/xandikos/web.sock",
             ]
         )
         self.assertIsNone(args.directory)
@@ -285,7 +285,7 @@ class ImportIMIPTests(unittest.TestCase):
         self.assertIsNone(args.principal_url)
         self.assertEqual("bob", args.username)
         self.assertEqual("/run/secrets/xandikos-password", args.password_file)
-        self.assertEqual("/run/xandikos.sock", args.unix_socket)
+        self.assertEqual("/run/xandikos/web.sock", args.unix_socket)
 
         args = parser.parse_args(["--principal-url", "http://localhost/user/"])
         self.assertIsNone(args.directory)
@@ -409,7 +409,7 @@ class ImportIMIPTests(unittest.TestCase):
                         server_url="https://dav.example/user/inbox/",
                         username="bob",
                         password_file=password_file,
-                        unix_socket="/run/xandikos.sock",
+                        unix_socket="/run/xandikos/web.sock",
                     ),
                     None,
                     data=_imip_message(),
@@ -421,7 +421,7 @@ class ImportIMIPTests(unittest.TestCase):
         self.assertIn(b"METHOD:REQUEST", captured["calendar_data"])
         self.assertEqual("bob", captured["username"])
         self.assertEqual("secret", captured["password"])
-        self.assertEqual("/run/xandikos.sock", captured["unix_socket"])
+        self.assertEqual("/run/xandikos/web.sock", captured["unix_socket"])
 
     def test_import_imip_reports_server_post_failure(self):
         async def post_itip_to_server(
@@ -478,7 +478,7 @@ class ImportIMIPTests(unittest.TestCase):
                         directory=None,
                         principal_url="http://localhost/user/",
                         username="bob",
-                        unix_socket="/run/xandikos.sock",
+                        unix_socket="/run/xandikos/web.sock",
                     ),
                     None,
                     data=_imip_message(),
@@ -491,8 +491,8 @@ class ImportIMIPTests(unittest.TestCase):
         self.assertIn(b"METHOD:REQUEST", captured["calendar_data"])
         self.assertEqual("bob", captured["discover_username"])
         self.assertEqual("bob", captured["post_username"])
-        self.assertEqual("/run/xandikos.sock", captured["discover_unix_socket"])
-        self.assertEqual("/run/xandikos.sock", captured["post_unix_socket"])
+        self.assertEqual("/run/xandikos/web.sock", captured["discover_unix_socket"])
+        self.assertEqual("/run/xandikos/web.sock", captured["post_unix_socket"])
 
 
 class MainCommandTests(unittest.TestCase):
