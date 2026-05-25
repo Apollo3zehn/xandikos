@@ -94,6 +94,10 @@ if [ "$AUTOCERT" = "true" ] || [ "$AUTOCERT" = "1" ]; then
     ARGS+=("--autocert")
 fi
 
+if [ -n "$HTPASSWD" ]; then
+    ARGS+=("--htpasswd=$HTPASSWD")
+fi
+
 # Handle graceful shutdown
 shutdown_handler() {
     echo "Received SIGTERM, shutting down gracefully..."

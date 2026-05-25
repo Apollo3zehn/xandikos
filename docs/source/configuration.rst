@@ -47,6 +47,29 @@ Basic Options
 
     Requires the ``cryptography`` Python package.
 
+``--htpasswd FILE``
+    Require HTTP Basic authentication, validating credentials against an
+    Apache-style ``htpasswd`` file. The file is reloaded automatically when
+    its modification time changes, so users can be added or removed
+    without restarting the server.
+
+    Supported hash formats are bcrypt (recommended; create with
+    ``htpasswd -B``) and SHA1. ``$apr1$`` and traditional crypt entries
+    are rejected.
+
+    **Requires ``--autocert``.** Basic authentication transmits credentials
+    in cleartext and must not be served over plain HTTP. If you run
+    Xandikos behind a reverse proxy, configure authentication at the
+    proxy instead of using this flag.
+
+    Requires the ``bcrypt`` Python package when verifying bcrypt entries.
+
+    Example::
+
+        htpasswd -B -c /etc/xandikos/htpasswd alice
+        xandikos --autocert --htpasswd /etc/xandikos/htpasswd \\
+                 -d /var/lib/xandikos
+
 
 Collection Management
 ~~~~~~~~~~~~~~~~~~~~~
@@ -134,6 +157,11 @@ When running in Docker, these environment variables are supported:
     written under the home directory of the container user; mount a volume
     at ``/code/.local/share/xandikos/certs`` if you want them to persist
     across container restarts.
+
+``HTPASSWD``
+    Path inside the container to an Apache-style htpasswd file used to
+    require HTTP Basic authentication (see ``--htpasswd`` above). Mount
+    the file read-only at this path. Requires ``AUTOCERT=true``.
 
 Configuration Examples
 ----------------------
