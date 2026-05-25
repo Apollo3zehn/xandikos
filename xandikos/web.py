@@ -3059,6 +3059,10 @@ async def main(options, parser):
 if __name__ == "__main__":
     import sys
 
+    # Alias so siblings doing ``from . import web`` get the same module
+    # object, not a second copy with distinct classes.
+    sys.modules["xandikos.web"] = sys.modules["__main__"]
+
     import argparse
 
     parser = argparse.ArgumentParser(usage="%(prog)s [options]")
