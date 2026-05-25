@@ -13,11 +13,22 @@ DEFAULT_ROUTE_PREFIX="/"
 ARGS=()
 
 # Handle environment variables and build arguments
-if [ -n "$PORT" ]; then
-    ARGS+=("--port=$PORT")
-else
-    ARGS+=("--port=$DEFAULT_PORT")
-fi
+# Determine the effective listen address up-front so we know whether we
+# need a --port (TCP) or not (unix socket).
+EFFECTIVE_LISTEN_ADDRESS="${LISTEN_ADDRESS:-$DEFAULT_LISTEN_ADDRESS}"
+
+case "$EFFECTIVE_LISTEN_ADDRESS" in
+    /*|unix:*)
+        # Unix-socket listener: --port is meaningless.
+        ;;
+    *)
+        if [ -n "$PORT" ]; then
+            ARGS+=("--port=$PORT")
+        else
+            ARGS+=("--port=$DEFAULT_PORT")
+        fi
+        ;;
+esac
 
 if [ -n "$METRICS_PORT" ]; then
     ARGS+=("--metrics-port=$METRICS_PORT")
@@ -25,10 +36,14 @@ else
     ARGS+=("--metrics-port=$DEFAULT_METRICS_PORT")
 fi
 
-if [ -n "$LISTEN_ADDRESS" ]; then
-    ARGS+=("--listen-address=$LISTEN_ADDRESS")
-else
-    ARGS+=("--listen-address=$DEFAULT_LISTEN_ADDRESS")
+ARGS+=("--listen-address=$EFFECTIVE_LISTEN_ADDRESS")
+
+# Optional permissions for a Unix-socket web listener.
+if [ -n "$SOCKET_MODE" ]; then
+    ARGS+=("--socket-mode=$SOCKET_MODE")
+fi
+if [ -n "$SOCKET_GROUP" ]; then
+    ARGS+=("--socket-group=$SOCKET_GROUP")
 fi
 
 if [ -n "$DATA_DIR" ]; then
@@ -96,6 +111,45 @@ fi
 
 if [ -n "$HTPASSWD" ]; then
     ARGS+=("--htpasswd=$HTPASSWD")
+fi
+
+# iMIP LMTP listener. Pass "auto" (or "1"/"true") to default to a
+# UNIX socket inside the /sockets/ volume; any other value is taken
+# verbatim (e.g. "unix:/sockets/custom.sock" or "host:port").
+if [ -n "$IMIP_LISTEN" ]; then
+    case "$IMIP_LISTEN" in
+        auto|1|true)
+            ARGS+=("--imip-listen=unix:/sockets/imip.sock")
+            ;;
+        *)
+            ARGS+=("--imip-listen=$IMIP_LISTEN")
+            ;;
+    esac
+fi
+if [ -n "$IMIP_LISTEN_MODE" ]; then
+    ARGS+=("--imip-listen-mode=$IMIP_LISTEN_MODE")
+fi
+if [ -n "$IMIP_LISTEN_GROUP" ]; then
+    ARGS+=("--imip-listen-group=$IMIP_LISTEN_GROUP")
+fi
+
+# In-process Postfix/Sendmail milter. Same "auto" convention as
+# IMIP_LISTEN above.
+if [ -n "$MILTER_LISTEN" ]; then
+    case "$MILTER_LISTEN" in
+        auto|1|true)
+            ARGS+=("--milter-listen=unix:/sockets/milter.sock")
+            ;;
+        *)
+            ARGS+=("--milter-listen=$MILTER_LISTEN")
+            ;;
+    esac
+fi
+if [ -n "$MILTER_LISTEN_MODE" ]; then
+    ARGS+=("--milter-listen-mode=$MILTER_LISTEN_MODE")
+fi
+if [ -n "$MILTER_LISTEN_GROUP" ]; then
+    ARGS+=("--milter-listen-group=$MILTER_LISTEN_GROUP")
 fi
 
 # Handle graceful shutdown
