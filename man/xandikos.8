@@ -45,5 +45,20 @@ Port to listen on. [8080]
 \fB\-\-route\-prefix\fR ROUTE_PREFIX
 Path to Xandikos. (useful when Xandikos is behind a
 reverse proxy) [/]
+.TP
+\fB\-\-autocert\fR
+Serve HTTPS using a self-signed certificate, generating
+one under ~/.local/share/xandikos/certs if missing.
+For development and testing only \(em do not use in
+production. Run Xandikos behind a reverse proxy with a
+real CA-issued certificate instead.
+.TP
+\fB\-\-htpasswd\fR FILE
+Require HTTP Basic authentication, validating credentials
+against an Apache-style htpasswd file. Supports bcrypt
+(\fBhtpasswd -B\fR, recommended) and SHA1 entries.
+Requires \fB\-\-autocert\fR; Basic auth must not be served
+over plain HTTP. If Xandikos is behind a reverse proxy,
+configure authentication there instead.
 .SH AUTHORS
 Jelmer Vernooij <jelmer@debian.org>
