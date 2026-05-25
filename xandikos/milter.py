@@ -66,6 +66,7 @@ from .imip_listen import (
     IMIPListenConfigError,
     _parse_socket_mode,
     _resolve_socket_group,
+    _store_payload,
     parse_listen_target,
 )
 from .import_imip import _post_itip_to_server, _read_password_file
@@ -242,6 +243,39 @@ class HTTPTransport(Transport):
             password=self._password,
             unix_socket=self._unix_socket,
         )
+
+
+class InProcessTransport(Transport):
+    """Store directly into a backend that lives in the same process.
+
+    Used by ``xandikos serve --milter-listen`` so the embedded milter
+    can drop iMIP payloads straight into the running backend's schedule
+    inbox without going through LMTP or HTTP.
+    """
+
+    def __init__(self, backend, principal_path: str) -> None:
+        self._backend = backend
+        self._principal_path = principal_path
+        self.target = principal_path
+
+    async def deliver(
+        self,
+        message_bytes: bytes,
+        payload: imip.IMIPPayload,
+        rcpts: list[str],
+    ) -> None:
+        del message_bytes, rcpts
+        msg_id = "(milter in-process)"
+        result = await _store_payload(
+            self._backend, self._principal_path, payload, msg_id
+        )
+        if result is None:
+            # _store_payload already logged the error; re-raise so the
+            # milter records the failure in its own log line and the
+            # caller sees deliver() failed.
+            raise RuntimeError(
+                f"failed to store iMIP payload in {self._principal_path}"
+            )
 
 
 def _lmtp_sendmail(
@@ -553,6 +587,42 @@ async def start_listener(
             os.chmod(socket_path, socket_mode_int)
 
     return Listener(server, socket_path)
+
+
+def add_listener_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register ``--milter-listen[-mode|-group]`` arguments on *parser*.
+
+    Used by ``xandikos serve`` to expose the milter inside the same
+    process as the web server. The standalone ``xandikos-milter`` CLI
+    uses :func:`add_arguments` instead (which adds transport flags as
+    well).
+    """
+    group = parser.add_argument_group(title="Milter Listener Options")
+    group.add_argument(
+        "--milter-listen",
+        dest="milter_listen",
+        default=os.environ.get("XANDIKOS_MILTER_LISTEN"),
+        help=(
+            "Listen for Postfix/Sendmail milter (SMFI) connections. Pass "
+            "unix:/path/to/sock for a Unix domain socket, or host:port "
+            "for TCP. Postfix uses this as smtpd_milters=<target>."
+        ),
+    )
+    group.add_argument(
+        "--milter-listen-mode",
+        dest="milter_listen_mode",
+        default=os.environ.get("XANDIKOS_MILTER_LISTEN_MODE"),
+        help=(
+            "File mode (octal, e.g. 660) for the milter Unix socket. "
+            "Ignored for TCP listeners."
+        ),
+    )
+    group.add_argument(
+        "--milter-listen-group",
+        dest="milter_listen_group",
+        default=os.environ.get("XANDIKOS_MILTER_LISTEN_GROUP"),
+        help=("Group ownership for the milter Unix socket. Ignored for TCP listeners."),
+    )
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:

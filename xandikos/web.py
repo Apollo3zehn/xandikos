@@ -52,6 +52,7 @@ from xandikos import (
     imip,
     imip_listen,
     imip_transport as imip_transport_mod,
+    milter,
     infit,
     itip,
     quota,
@@ -2737,6 +2738,7 @@ def add_parser(parser):
 
     imip_transport_mod.add_arguments(parser)
     imip_listen.add_arguments(parser)
+    milter.add_listener_arguments(parser)
 
 
 async def main(options, parser):
@@ -2981,6 +2983,31 @@ async def main(options, parser):
         else:
             logger.info("Listening for iMIP on LMTP unix socket %s", target)
 
+    milter_listener: milter.Listener | None = None
+    if options.milter_listen:
+        try:
+            milter_target = milter.parse_listen_target(options.milter_listen)
+        except milter.IMIPListenConfigError as exc:
+            parser.error(str(exc))
+        milter_handler = milter.MilterHandler(
+            milter.InProcessTransport(backend, options.current_user_principal)
+        )
+        try:
+            milter_listener = await milter.start_listener(
+                milter_target,
+                milter_handler,
+                socket_mode=options.milter_listen_mode,
+                socket_group=options.milter_listen_group,
+            )
+        except milter.IMIPListenConfigError as exc:
+            parser.error(str(exc))
+        if isinstance(milter_target, tuple):
+            logger.info(
+                "Listening for milter on %s:%s", milter_target[0], milter_target[1]
+            )
+        else:
+            logger.info("Listening for milter on unix socket %s", milter_target)
+
     # Set socket group ownership after the socket is created
     if socket_path and options.socket_group is not None:
         import grp
@@ -3018,6 +3045,9 @@ async def main(options, parser):
 
     if imip_listener is not None:
         await imip_listener.stop()
+
+    if milter_listener is not None:
+        await milter_listener.stop()
 
     await runner.cleanup()
     if metrics_app:

@@ -264,6 +264,43 @@ class LMTPTransportTargetTests(unittest.TestCase):
         self.assertEqual("mta.example:24", t.target)
 
 
+class InProcessTransportTests(unittest.IsolatedAsyncioTestCase):
+    """Cover the in-process transport used by ``serve --milter-listen``."""
+
+    async def asyncSetUp(self):
+        from xandikos.web import SingleUserFilesystemBackend
+
+        self.test_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.test_dir)
+        self.backend = SingleUserFilesystemBackend(self.test_dir)
+        self.backend._mark_as_principal("/user/")
+        self.backend.create_principal("/user/", create_defaults=True)
+
+    async def test_valid_request_lands_in_inbox(self):
+        handler = milter.MilterHandler(
+            milter.InProcessTransport(self.backend, "/user/")
+        )
+        await handler.handle_message(_imip_message_bytes(), ["bob@example.com"])
+        inbox = self.backend.get_resource("/user/inbox")
+        self.assertEqual(1, len(list(inbox.members())))
+
+    async def test_missing_principal_is_logged_but_not_raised(self):
+        handler = milter.MilterHandler(
+            milter.InProcessTransport(self.backend, "/nonexistent/")
+        )
+        with self.assertLogs("xandikos.milter", level="ERROR") as logs:
+            # Must not propagate — the milter always accepts.
+            await handler.handle_message(_imip_message_bytes(), ["bob@example.com"])
+        joined = "\n".join(logs.output)
+        self.assertIn("/nonexistent/", joined)
+        inbox = self.backend.get_resource("/user/inbox")
+        self.assertEqual(0, len(list(inbox.members())))
+
+    async def test_target_is_principal_path_for_log(self):
+        t = milter.InProcessTransport(self.backend, "/user/")
+        self.assertEqual("/user/", t.target)
+
+
 class BuildTransportTests(unittest.TestCase):
     """Validate the --lmtp-socket / --server-url selection in main()."""
 

@@ -21,6 +21,25 @@
 #   HTPASSWD - Path to an Apache htpasswd file to require Basic auth.
 #              Requires AUTOCERT=true. Mount the file read-only into the
 #              container.
+#   SOCKET_MODE - File mode (octal) for the web Unix socket. Only meaningful
+#                 when LISTEN_ADDRESS is a path or unix:/...
+#   SOCKET_GROUP - Group ownership for the web Unix socket.
+#   IMIP_LISTEN - Enable the iMIP LMTP listener. Set to "auto" to bind
+#                 unix:/sockets/imip.sock, or pass a full target such as
+#                 "unix:/sockets/imip.sock" or "host:port".
+#   IMIP_LISTEN_MODE / IMIP_LISTEN_GROUP - permissions for the LMTP socket.
+#   MILTER_LISTEN - Enable the built-in Postfix/Sendmail milter. Set to
+#                   "auto" to bind unix:/sockets/milter.sock, or pass a
+#                   full target such as "unix:/sockets/milter.sock" or
+#                   "host:port".
+#   MILTER_LISTEN_MODE / MILTER_LISTEN_GROUP - permissions for the milter
+#                   socket.
+#
+# Volumes:
+#   /data    - calendar/contact storage (always required)
+#   /sockets - where the web, iMIP and milter Unix sockets are created.
+#              Bind-mount this from the host (e.g. /run/xandikos:/sockets)
+#              to let host services (nginx, Postfix, ...) reach them.
 #
 # Command line arguments passed to the container override environment variables.
 
@@ -38,9 +57,14 @@ RUN apt-get update && \
 ADD . /code
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && chown xandikos:xandikos /entrypoint.sh && \
-    mkdir -p /data && chown xandikos:xandikos /data
+    mkdir -p /data /sockets && chown xandikos:xandikos /data /sockets
 ENV PYTHONPATH=/code
 VOLUME /data
+# /sockets/ is where xandikos drops its UNIX domain sockets (web, iMIP
+# LMTP, milter) when configured via LISTEN_ADDRESS / IMIP_LISTEN /
+# MILTER_LISTEN. Bind-mount this from the host so the sockets are
+# reachable from outside the container.
+VOLUME /sockets
 EXPOSE 8000 8001
 USER xandikos
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
