@@ -45,5 +45,12 @@ Port to listen on. [8080]
 \fB\-\-route\-prefix\fR ROUTE_PREFIX
 Path to Xandikos. (useful when Xandikos is behind a
 reverse proxy) [/]
+.TP
+\fB\-\-autocert\fR
+Serve HTTPS using a self-signed certificate, generating
+one under ~/.local/share/xandikos/certs if missing.
+For development and testing only \(em do not use in
+production. Run Xandikos behind a reverse proxy with a
+real CA-issued certificate instead.
 .SH AUTHORS
 Jelmer Vernooij <jelmer@debian.org>

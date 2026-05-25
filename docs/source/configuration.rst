@@ -30,6 +30,23 @@ Basic Options
 
     Example: ``--route-prefix /dav``
 
+``--autocert``
+    Serve HTTPS using a self-signed certificate. The certificate and private
+    key are generated on first use and stored under
+    ``~/.local/share/xandikos/certs`` (respecting ``XDG_DATA_HOME``). The
+    certificate is regenerated automatically when it is within 30 days of
+    expiring.
+
+    This option exists for development and testing. **Do not use it in
+    production.** Xandikos itself is not hardened for direct exposure to
+    the internet (no authentication, no rate limiting) and clients will not
+    trust a self-signed certificate. For production, run Xandikos behind a
+    reverse proxy that handles authentication and terminates TLS with a
+    certificate from a trusted CA such as Let's Encrypt - see
+    :ref:`reverse-proxy`.
+
+    Requires the ``cryptography`` Python package.
+
 
 Collection Management
 ~~~~~~~~~~~~~~~~~~~~~
@@ -110,6 +127,13 @@ When running in Docker, these environment variables are supported:
 
 ``XANDIKOS_PORT``
     Port to listen on (default: ``8080``).
+
+``AUTOCERT``
+    Set to ``true`` or ``1`` to serve HTTPS with a self-signed certificate
+    (development/testing only - see ``--autocert`` above). Certificates are
+    written under the home directory of the container user; mount a volume
+    at ``/code/.local/share/xandikos/certs`` if you want them to persist
+    across container restarts.
 
 Configuration Examples
 ----------------------

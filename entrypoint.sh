@@ -90,6 +90,10 @@ if [ "$NO_DETECT_SYSTEMD" = "true" ] || [ "$NO_DETECT_SYSTEMD" = "1" ]; then
     ARGS+=("--no-detect-systemd")
 fi
 
+if [ "$AUTOCERT" = "true" ] || [ "$AUTOCERT" = "1" ]; then
+    ARGS+=("--autocert")
+fi
+
 # Handle graceful shutdown
 shutdown_handler() {
     echo "Received SIGTERM, shutting down gracefully..."

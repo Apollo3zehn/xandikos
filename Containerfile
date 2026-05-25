@@ -15,13 +15,16 @@
 #   DEBUG - Enable debug logging (true/false)
 #   DUMP_DAV_XML - Print DAV XML requests/responses (true/false)
 #   NO_STRICT - Enable client compatibility workarounds (true/false)
+#   AUTOCERT - Serve HTTPS with a self-signed certificate (true/false).
+#              Development/testing only - use a reverse proxy with a real
+#              CA-issued certificate for production.
 #
 # Command line arguments passed to the container override environment variables.
 
 FROM debian:sid-slim
 LABEL maintainer="jelmer@jelmer.uk"
 RUN apt-get update && \
-    apt-get -y install --no-install-recommends python3-icalendar python3-pip python3-jinja2 python3-defusedxml python3-aiohttp python3-vobject python3-aiohttp-openmetrics python3-qrcode curl && \
+    apt-get -y install --no-install-recommends python3-icalendar python3-pip python3-jinja2 python3-defusedxml python3-aiohttp python3-vobject python3-aiohttp-openmetrics python3-qrcode python3-cryptography curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/ && \
     groupadd -g 1000 xandikos && \
