@@ -1,0 +1,97 @@
+.TH XANDIKOS-MILTER "8" "May 2026" "xandikos" "System Administration Utilities"
+.SH NAME
+xandikos-milter \- Postfix/Sendmail milter for inbound iMIP scheduling
+.SH SYNOPSIS
+.B xandikos-milter
+\fB\-\-lmtp\-socket\fR \fITARGET\fR
+\fB\-\-listen\fR \fITARGET\fR
+[\fIOPTIONS\fR]
+.br
+.B xandikos-milter
+\fB\-\-server\-url\fR \fIURL\fR
+\fB\-\-listen\fR \fITARGET\fR
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B xandikos-milter
+runs a libmilter-protocol server that Postfix or Sendmail can hand each
+inbound message to. If the message carries a valid iMIP REQUEST, REPLY
+or CANCEL (RFC 6047), the message is forwarded to a running Xandikos
+for storage in the schedule inbox. The message is always accepted, so
+normal mailbox delivery proceeds.
+
+Two transports are supported. Exactly one must be configured:
+.TP
+.B LMTP (recommended)
+With \fB\-\-lmtp\-socket\fR, the milter forwards the raw RFC 5322
+message to a running
+.B xandikos serve \-\-imip\-listen
+endpoint. This is symmetric with the existing iMIP LMTP listener and is
+the cleanest setup when the milter and Xandikos run on the same host.
+.TP
+.B HTTP fallback
+With \fB\-\-server\-url\fR, the extracted iTIP payload is POSTed to a
+Xandikos schedule-inbox URL. Use this when the milter and Xandikos run
+on different hosts and you want HTTPS + HTTP Basic credentials between
+them.
+.PP
+Messages that carry an
+.B Auto-Submitted
+header other than
+.B no
+(RFC 3834) are skipped to avoid loops between two Xandikos instances.
+.SH OPTIONS
+.TP
+\fB\-\-lmtp\-socket\fR TARGET
+LMTP endpoint of a running
+.BR "xandikos serve \-\-imip\-listen" .
+Pass \fBunix:/path/to/sock\fR for a Unix domain socket or
+\fBhost:port\fR for TCP. May also be set via
+\fBXANDIKOS_MILTER_LMTP_SOCKET\fR.
+.TP
+\fB\-\-server\-url\fR URL
+Schedule-inbox URL of a running Xandikos server. Each iMIP payload is
+POSTed here as
+.BR text/calendar .
+May also be set via \fBXANDIKOS_MILTER_SERVER_URL\fR.
+.TP
+\fB\-\-username\fR USER
+Username for HTTP Basic authentication against \fB\-\-server\-url\fR.
+.TP
+\fB\-\-password\-file\fR FILE
+File containing the HTTP Basic authentication password.
+.TP
+\fB\-\-unix\-socket\fR PATH
+Unix domain socket path for HTTP requests to the Xandikos server
+(useful when Xandikos itself listens on a Unix socket).
+.TP
+\fB\-\-listen\fR TARGET
+Listen target. Pass \fBunix:/path/to/sock\fR for a Unix domain socket,
+or \fBhost:port\fR for TCP. Postfix uses this as
+\fBsmtpd_milters=\fITARGET\fR. May also be set via
+\fBXANDIKOS_MILTER_LISTEN\fR.
+.TP
+\fB\-\-listen\-mode\fR MODE
+File mode (octal, e.g. \fB660\fR) for the Unix socket. Ignored for TCP
+listeners.
+.TP
+\fB\-\-listen\-group\fR GROUP
+Group ownership for the Unix socket. Ignored for TCP listeners.
+.SH POSTFIX CONFIGURATION
+Add the milter to
+.B main.cf
+so that Postfix consults it during SMTP intake:
+.PP
+.RS
+smtpd_milters = unix:/run/xandikos/milter.sock
+.br
+non_smtpd_milters = $smtpd_milters
+.br
+milter_default_action = accept
+.RE
+.PP
+\fBmilter_default_action = accept\fR ensures Postfix keeps delivering
+mail if the milter is unreachable.
+.SH SEE ALSO
+.BR xandikos (8)
+.SH AUTHORS
+Jelmer Vernooij <jelmer@debian.org>

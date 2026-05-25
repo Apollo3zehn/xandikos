@@ -50,6 +50,7 @@ typing = [
 
 [project.scripts]
 xandikos = "xandikos.__main__:cli_main"
+xandikos-milter = "xandikos.milter:cli_main"
 
 [tool.setuptools]
 include-package-data = false

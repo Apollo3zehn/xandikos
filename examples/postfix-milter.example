@@ -1,0 +1,105 @@
+# Postfix configuration snippet for xandikos-milter.
+#
+# Run `xandikos-milter` listening on a Unix socket; Postfix consults it
+# during SMTP intake. Any inbound iMIP message is forwarded to a running
+# Xandikos for storage in the schedule inbox, then the message is
+# handed back to Postfix for normal mailbox delivery.
+#
+# ----------------------------------------------------------------------
+# 1. Start the milter
+# ----------------------------------------------------------------------
+#
+# Two transports are available:
+#
+# a) LMTP (recommended for same-host setups). The milter hands the
+#    message to `xandikos serve --imip-listen` over LMTP — exactly the
+#    same path Sieve uses today.
+#
+#      xandikos serve \
+#          --directory /var/lib/xandikos \
+#          --imip-listen unix:/run/xandikos/imip.sock \
+#          --imip-listen-mode 660 \
+#          --imip-listen-group postfix
+#
+#      xandikos-milter \
+#          --lmtp-socket unix:/run/xandikos/imip.sock \
+#          --listen unix:/run/xandikos/milter.sock \
+#          --listen-mode 660 \
+#          --listen-group postfix
+#
+# b) HTTP (cross-host fallback). The milter POSTs the extracted iTIP
+#    payload to Xandikos's schedule-inbox URL. Use this when the milter
+#    and Xandikos run on different hosts.
+#
+#      xandikos-milter \
+#          --server-url https://dav.example.net/user/inbox/ \
+#          --username calendar \
+#          --password-file /run/secrets/xandikos-password \
+#          --listen unix:/run/xandikos/milter.sock \
+#          --listen-mode 660 \
+#          --listen-group postfix
+#
+# Both --listen-mode 660 and --listen-group postfix are important: the
+# Postfix smtpd processes dial the socket as the `postfix` user and
+# need write access to it.
+#
+# ----------------------------------------------------------------------
+# 2. Wire it into Postfix (/etc/postfix/main.cf)
+# ----------------------------------------------------------------------
+#
+# smtpd_milters consults the milter for mail arriving via the smtpd
+# service (local and remote SMTP). non_smtpd_milters covers mail
+# injected via sendmail(1) / pickup (cron, `mail`, etc.) — set it to
+# $smtpd_milters so iMIP coverage is uniform.
+#
+# milter_default_action = accept is the safety valve: if xandikos-milter
+# is down, Postfix keeps delivering mail and only loses iMIP harvesting.
+# Without this, the default `tempfail` would defer every inbound
+# message during a Xandikos outage — almost never what you want for an
+# iMIP-harvesting milter.
+#
+# milter_protocol = 6 pins the wire version. xandikos-milter speaks v6;
+# pinning keeps the negotiated version predictable across Postfix
+# upgrades.
+#
+#   smtpd_milters         = unix:/run/xandikos/milter.sock
+#   non_smtpd_milters     = $smtpd_milters
+#   milter_default_action = accept
+#   milter_protocol       = 6
+#
+# Apply with `postconf -e` + `systemctl reload postfix`:
+#
+#   sudo postconf -e \
+#       'smtpd_milters = unix:/run/xandikos/milter.sock' \
+#       'non_smtpd_milters = $smtpd_milters' \
+#       'milter_default_action = accept' \
+#       'milter_protocol = 6'
+#   sudo systemctl reload postfix
+#
+# If Postfix runs chrooted (the Debian default for the smtpd service),
+# put the socket inside the queue directory and reference it without
+# the chroot prefix:
+#
+#   xandikos-milter --listen unix:/var/spool/postfix/private/xandikos-milter ...
+#   # main.cf:
+#   smtpd_milters = unix:private/xandikos-milter
+#
+# ----------------------------------------------------------------------
+# 3. Verify
+# ----------------------------------------------------------------------
+#
+#   postconf -n | grep -E '^(smtpd|non_smtpd)_milters|^milter_'
+#   journalctl -u postfix     # look for "connect to milter service"
+#   journalctl -u xandikos-milter
+#                              # look for "Forwarded iMIP ..." log lines
+#
+# ----------------------------------------------------------------------
+# Notes
+# ----------------------------------------------------------------------
+#
+# - The milter never modifies messages and always returns ACCEPT, so
+#   combining it with other milters (rspamd, opendkim, ...) is safe.
+# - The milter's content timeout (`milter_content_timeout`, default
+#   300s) covers the LMTP/HTTP round-trip to Xandikos. The default is
+#   plenty for local LMTP; for a slow remote --server-url over the
+#   public internet you may want to bump it.
