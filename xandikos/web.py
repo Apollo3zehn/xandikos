@@ -2747,9 +2747,7 @@ async def main(options, parser):
         if socket_path is not None:
             parser.error("--autocert cannot be combined with a unix domain socket")
         if listen_socks:
-            parser.error(
-                "--autocert cannot be combined with systemd socket activation"
-            )
+            parser.error("--autocert cannot be combined with systemd socket activation")
         from . import autocert as autocert_mod
 
         try:
