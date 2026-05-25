@@ -33,7 +33,7 @@ ADD . /code
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && chown xandikos:xandikos /entrypoint.sh && \
     mkdir -p /data && chown xandikos:xandikos /data
-WORKDIR /code
+ENV PYTHONPATH=/code
 VOLUME /data
 EXPOSE 8000 8001
 USER xandikos
