@@ -20,15 +20,17 @@ A scheduling exchange has two halves:
 **Inbound iMIP**
    A remote organiser's mail arrives at the user's mailbox. Something
    has to extract the iTIP payload and POST it into the user's
-   schedule inbox so Xandikos can apply it. Two transports are
+   schedule inbox so Xandikos can apply it. Four transports are
    supported:
 
    - the ``xandikos import-imip`` subcommand, invoked from a Sieve
      pipe or any other delivery hook;
    - an LMTP listener built into ``xandikos serve`` that an MTA or
      Sieve script can deliver to directly;
+   - a Postfix/Sendmail milter built into ``xandikos serve`` via
+     ``--milter-listen``, for the single-process same-host setup;
    - a separate ``xandikos-milter`` daemon that Postfix or Sendmail
-     consults at SMTP intake time.
+     consults at SMTP intake time, for split or cross-host setups.
 
 Outbound iMIP traffic carries an ``Auto-Submitted: auto-generated``
 header (:rfc:`3834`); the inbound paths skip such messages so a
@@ -193,16 +195,36 @@ that lands on the host is harvested. The cost is that the milter sees
 cheap (it does: a quick MIME walk that bails out as soon as no
 ``text/calendar`` part is found).
 
-The milter does not touch the on-disk store directly — it always hands
-off to a running Xandikos. Two transports are supported.
+Pick one of three deployment shapes depending on where Xandikos lives
+relative to Postfix.
 
-LMTP (same-host, recommended)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Built-in milter (single-process, recommended)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Pair the milter with the existing ``--imip-listen`` LMTP listener.
-Postfix → milter → Xandikos LMTP is the cleanest setup when both
-services run on the same host, and reuses the same code path the
-existing Sieve hookup uses.
+When Xandikos and Postfix run on the same host, the simplest setup is
+to enable the milter inside ``xandikos serve`` itself with
+``--milter-listen``. No second daemon, no LMTP hop, no
+``--imip-listen`` needed.
+
+.. code-block:: bash
+
+   xandikos serve \
+       --directory /var/lib/xandikos \
+       --milter-listen unix:/run/xandikos/milter.sock \
+       --milter-listen-mode 660 \
+       --milter-listen-group postfix
+
+The milter socket sits next to the web socket under ``/run/xandikos/``
+and Postfix dials it via ``smtpd_milters`` (see :ref:`Postfix wiring
+<milter-postfix-wiring>` below).
+
+Standalone milter + LMTP
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+When you want the milter as its own daemon — separate systemd unit,
+separate restart cycle, separate process for whatever reason — run
+``xandikos-milter`` and have it forward over LMTP to a separate
+``xandikos serve --imip-listen``.
 
 .. code-block:: bash
 
@@ -218,8 +240,8 @@ existing Sieve hookup uses.
        --listen-mode 660 \
        --listen-group postfix
 
-HTTP (cross-host fallback)
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Standalone milter + HTTP (cross-host)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 When the milter and Xandikos live on different hosts, point the milter
 at the schedule-inbox URL over HTTPS, with HTTP Basic credentials read
@@ -238,6 +260,8 @@ from a tightly-permissioned password file:
 If Xandikos itself listens on a Unix socket on the same host as the
 milter, pass ``--unix-socket`` to dial it directly without going via
 TCP.
+
+.. _milter-postfix-wiring:
 
 Postfix wiring
 ~~~~~~~~~~~~~~
@@ -352,11 +376,17 @@ Reference
 
 A copy-pasteable snippet lives in ``examples/postfix-milter.example``.
 As with ``--imip-listen``, the milter's Unix socket is the access
-boundary between Postfix and Xandikos: use ``--listen-mode`` /
-``--listen-group`` to restrict who can talk to it. Equivalent
-environment variables for Docker: ``XANDIKOS_MILTER_LMTP_SOCKET``,
-``XANDIKOS_MILTER_SERVER_URL``, ``XANDIKOS_MILTER_LISTEN``,
-``XANDIKOS_MILTER_LISTEN_MODE``, ``XANDIKOS_MILTER_LISTEN_GROUP``.
+boundary between Postfix and Xandikos: restrict it with the matching
+``-mode`` / ``-group`` flag for whichever entry point you use
+(``serve``: ``--milter-listen-mode`` / ``--milter-listen-group``;
+``xandikos-milter``: ``--listen-mode`` / ``--listen-group``). The
+underlying ``XANDIKOS_MILTER_LISTEN`` /
+``XANDIKOS_MILTER_LISTEN_MODE`` / ``XANDIKOS_MILTER_LISTEN_GROUP``
+environment variables are shared between the two so a Docker setup
+configures them once. The transport-specific
+``XANDIKOS_MILTER_LMTP_SOCKET`` / ``XANDIKOS_MILTER_SERVER_URL`` only
+apply to ``xandikos-milter`` (the in-process built-in always uses the
+running backend directly).
 
 Loop avoidance
 --------------
