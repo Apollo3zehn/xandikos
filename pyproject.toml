@@ -38,6 +38,7 @@ prometheus = ["aiohttp-openmetrics"]
 systemd = ["systemd_python"]
 qrcode = ["qrcode[pil]"]
 imip-listen = ["aiosmtpd"]
+htpasswd = ["bcrypt"]
 dev = [
    "ruff==0.15.12",
    "pytest",

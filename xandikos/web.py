@@ -25,6 +25,7 @@ the carddav support, the caldav support and the DAV store.
 """
 
 import asyncio
+import base64
 import functools
 import hashlib
 import logging
@@ -2466,6 +2467,52 @@ def run_simple_server(
     web.run_app(app, port=port, host=listen_address, path=socket_path)
 
 
+BASIC_AUTH_REALM = "Xandikos"
+
+
+def basic_auth_middleware(htpasswd_file):
+    """Build an aiohttp middleware enforcing HTTP Basic auth against htpasswd_file."""
+    import binascii
+    from aiohttp import web
+
+    from . import htpasswd as htpasswd_mod
+
+    def _unauthorized() -> web.Response:
+        return web.Response(
+            status=401,
+            text="Authentication required.\n",
+            headers={"WWW-Authenticate": f'Basic realm="{BASIC_AUTH_REALM}"'},
+        )
+
+    @web.middleware
+    async def middleware(request, handler):
+        header = request.headers.get("Authorization", "")
+        scheme, _, encoded = header.partition(" ")
+        if scheme.lower() != "basic" or not encoded:
+            return _unauthorized()
+        try:
+            decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError):
+            return _unauthorized()
+        username, _, password = decoded.partition(":")
+        if not username:
+            return _unauthorized()
+        try:
+            if not htpasswd_file.check(username, password):
+                return _unauthorized()
+        except htpasswd_mod.HtpasswdError as exc:
+            logger.error("htpasswd check failed: %s", exc)
+            return web.Response(status=500, text="Authentication misconfigured.\n")
+        # Propagate the authenticated user to the WebDAV layer, which reads
+        # X-Remote-User the same way it would behind a reverse proxy.
+        new_request = request.clone(
+            headers={**request.headers, "X-Remote-User": username}
+        )
+        return await handler(new_request)
+
+    return middleware
+
+
 def add_parser(parser):
     import argparse
 
@@ -2534,6 +2581,20 @@ def add_parser(parser):
             "Serve HTTPS using a self-signed certificate, generating one "
             "under ~/.local/share/xandikos/certs if missing. "
             "For development and testing only - do not use in production."
+        ),
+    )
+    access_group.add_argument(
+        "--htpasswd",
+        dest="htpasswd",
+        default=None,
+        metavar="FILE",
+        help=(
+            "Require HTTP Basic authentication using credentials from the "
+            "given Apache-style htpasswd file. bcrypt entries (htpasswd -B) "
+            "are recommended. Requires --autocert: Basic auth sends "
+            "credentials in cleartext and must not be served over plain "
+            "HTTP. If you run Xandikos behind a reverse proxy, configure "
+            "authentication there instead of using this flag."
         ),
     )
     parser.add_argument(
@@ -2699,6 +2760,25 @@ async def main(options, parser):
             parser.error(str(exc))
         ssl_context = autocert_mod.make_ssl_context(cert_path, key_path)
 
+    htpasswd_file = None
+    if options.htpasswd:
+        if ssl_context is None:
+            parser.error(
+                "--htpasswd requires --autocert. Basic authentication sends "
+                "credentials in cleartext and must not be served over plain "
+                "HTTP. If you are running Xandikos behind a reverse proxy, "
+                "configure authentication at the proxy instead."
+            )
+        from . import htpasswd as htpasswd_mod
+
+        try:
+            htpasswd_file = htpasswd_mod.HtpasswdFile(options.htpasswd)
+        except htpasswd_mod.HtpasswdError as exc:
+            parser.error(str(exc))
+        logger.info(
+            "HTTP Basic authentication enabled (htpasswd: %s)", options.htpasswd
+        )
+
     if options.metrics_port == options.port:
         parser.error("Metrics port cannot be the same as the main port")
 
@@ -2727,6 +2807,8 @@ async def main(options, parser):
 
     if options.route_prefix.strip("/"):
         xandikos_app = web.Application()
+        if htpasswd_file is not None:
+            xandikos_app.middlewares.append(basic_auth_middleware(htpasswd_file))
         xandikos_app.router.add_route("*", "/{path_info:.*}", xandikos_handler)
 
         async def redirect_to_subprefix(request):
@@ -2735,6 +2817,8 @@ async def main(options, parser):
         app.router.add_route("*", "/", redirect_to_subprefix)
         app.add_subapp(options.route_prefix, xandikos_app)
     else:
+        if htpasswd_file is not None:
+            app.middlewares.append(basic_auth_middleware(htpasswd_file))
         app.router.add_route("*", "/{path_info:.*}", xandikos_handler)
 
     if options.avahi:
