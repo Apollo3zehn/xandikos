@@ -666,25 +666,44 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
             return
         try:
             parsed = Calendar.from_ical(b"".join(contents).decode("utf-8"))
-        except ValueError:
+        except ValueError as exc:
+            logger.info(
+                "Inbox auto-apply skipping %s: invalid iCalendar (%s)", name, exc
+            )
             return
         if not isinstance(parsed, Calendar):
+            logger.info(
+                "Inbox auto-apply skipping %s: payload is not a VCALENDAR", name
+            )
             return
         method_value = parsed.get("METHOD")
         method = str(method_value).upper() if method_value is not None else ""
         if method not in {"REQUEST", "CANCEL", "REPLY"}:
+            logger.info(
+                "Inbox auto-apply skipping %s: METHOD %r is not actionable",
+                name,
+                method,
+            )
             return
 
         calendar = self._default_calendar()
         if calendar is None:
+            logger.info(
+                "Inbox auto-apply skipping %s iTIP %s: no schedule-default-calendar-URL set",
+                name,
+                method,
+            )
             return
         uid = itip.itip_uid(parsed)
         if uid is None:
+            logger.info(
+                "Inbox auto-apply skipping %s iTIP %s: no UID in payload", name, method
+            )
             return
         existing = await _find_calendar_member_by_uid(calendar, uid)
 
         if method == "REQUEST":
-            await self._apply_request(calendar, parsed, existing)
+            await self._apply_request(calendar, parsed, existing, uid)
         elif method == "CANCEL":
             await self._apply_cancel(parsed, uid, existing)
         elif method == "REPLY":
@@ -704,14 +723,26 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
         calendar: "CalendarCollection",
         itip_message: Calendar,
         existing: "tuple[str, ObjectResource, Calendar] | None",
+        uid: str,
     ) -> None:
         new_cal = itip.strip_method(itip_message)
         if existing is None:
             await calendar.create_member(None, [new_cal.to_ical()], "text/calendar")
+            logger.info(
+                "Inbox auto-apply: created %s in %s for REQUEST",
+                uid,
+                calendar.relpath,
+            )
             return
         member_name, member, existing_cal = existing
         merged = itip.preserve_partstats(existing_cal, new_cal)
         await _replace_member_body(member, merged)
+        logger.info(
+            "Inbox auto-apply: updated %s (%s) in %s for REQUEST",
+            uid,
+            member_name,
+            calendar.relpath,
+        )
 
     async def _apply_cancel(
         self,
@@ -720,6 +751,9 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
         existing: "tuple[str, ObjectResource, Calendar] | None",
     ) -> None:
         if existing is None:
+            logger.info(
+                "Inbox auto-apply: CANCEL for %s found no local copy to cancel", uid
+            )
             return
         member_name, member, existing_cal = existing
         for comp in existing_cal.subcomponents:
@@ -729,6 +763,7 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
             ):
                 comp["STATUS"] = "CANCELLED"
         await _replace_member_body(member, existing_cal)
+        logger.info("Inbox auto-apply: cancelled %s (%s)", uid, member_name)
 
     async def _apply_reply(
         self,
@@ -737,6 +772,9 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
         existing: "tuple[str, ObjectResource, Calendar] | None",
     ) -> None:
         if existing is None:
+            logger.info(
+                "Inbox auto-apply: REPLY for %s found no local copy to update", uid
+            )
             return
         member_name, member, existing_cal = existing
 
@@ -776,6 +814,18 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
                     changed = True
         if changed:
             await _replace_member_body(member, existing_cal)
+            logger.info(
+                "Inbox auto-apply: applied REPLY to %s (%s); updated PARTSTATs: %s",
+                uid,
+                member_name,
+                ", ".join(f"{addr}={ps}" for addr, ps in updates.items()),
+            )
+        else:
+            logger.info(
+                "Inbox auto-apply: REPLY for %s (%s) had no new PARTSTATs to apply",
+                uid,
+                member_name,
+            )
 
 
 async def _find_calendar_member_by_uid(
