@@ -1,3 +1,14 @@
+0.4.2	2026-05-25
+
+ * Add ``xandikos-milter``, a Postfix milter that delivers inbound iMIP
+   messages into per-principal calendars. (Jelmer Vernooĳ)
+
+ * Add ``--milter-listen`` to ``xandikos serve`` for embedding the milter
+   in the main process. (Jelmer Vernooĳ)
+
+ * Move default Unix sockets under ``/run/xandikos/`` and expose a
+   ``/sockets`` volume in the container image. (Jelmer Vernooĳ)
+
 0.4.1	2026-05-25
 
  * Allow exporting a calendar collection as a single iCalendar feed.
