@@ -201,6 +201,27 @@ Create ``/etc/systemd/system/xandikos.service``:
    [Install]
    WantedBy=multi-user.target
 
+Per-Principal Configuration
+---------------------------
+
+A principal's settings live in a ``.xandikos`` INI file directly under
+the principal directory. The same file holds scheduling settings such as
+``calendar-user-address-set`` and the calendar/addressbook home-set
+overrides.
+
+To advertise calendar and addressbook home collections at non-default
+paths for a principal, drop a ``.xandikos`` file under the principal
+directory before the home directories are created:
+
+.. code-block:: ini
+
+   [principal]
+   calendar-home-set = my-calendars
+   addressbook-home-set = my-contacts
+
+Both keys accept a comma-separated list to advertise multiple homes.
+When unset, the defaults ``calendars`` and ``contacts`` apply.
+
 Directory Structure
 -------------------
 

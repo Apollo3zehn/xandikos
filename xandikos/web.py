@@ -125,7 +125,6 @@ WELLKNOWN_DAV_PATHS = {
     carddav.WELLKNOWN_CARDDAV_PATH,
 }
 
-# TODO(jelmer): Make these configurable/dynamic
 CALENDAR_HOME_SET = ["calendars"]
 ADDRESSBOOK_HOME_SET = ["contacts"]
 GIT_PATH = ".git"
@@ -1920,10 +1919,44 @@ class Principal(webdav.Principal):
         raise KeyError
 
     def get_calendar_home_set(self):
-        return CALENDAR_HOME_SET
+        """Return calendar-home-set paths for this principal.
+
+        Reads from the principal's ``.xandikos`` config, falling back
+        to :data:`CALENDAR_HOME_SET` when no override is configured.
+        Set via the ``[principal]`` ``calendar-home-set`` key.
+        """
+        try:
+            return self._metadata().get_calendar_home_set()
+        except KeyError:
+            return CALENDAR_HOME_SET
+
+    def set_calendar_home_set(self, paths: list[str]) -> None:
+        """Persist the principal's calendar-home-set override.
+
+        Pass an empty list to unset the override and restore the
+        :data:`CALENDAR_HOME_SET` default.
+        """
+        self._metadata().set_calendar_home_set(paths)
 
     def get_addressbook_home_set(self):
-        return ADDRESSBOOK_HOME_SET
+        """Return addressbook-home-set paths for this principal.
+
+        Reads from the principal's ``.xandikos`` config, falling back
+        to :data:`ADDRESSBOOK_HOME_SET` when no override is configured.
+        Set via the ``[principal]`` ``addressbook-home-set`` key.
+        """
+        try:
+            return self._metadata().get_addressbook_home_set()
+        except KeyError:
+            return ADDRESSBOOK_HOME_SET
+
+    def set_addressbook_home_set(self, paths: list[str]) -> None:
+        """Persist the principal's addressbook-home-set override.
+
+        Pass an empty list to unset the override and restore the
+        :data:`ADDRESSBOOK_HOME_SET` default.
+        """
+        self._metadata().set_addressbook_home_set(paths)
 
     def get_calendar_user_address_set(self):
         """Return this principal's calendar user addresses.

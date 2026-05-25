@@ -163,6 +163,38 @@ class CollectionMetadata:
         """
         raise NotImplementedError(self.set_schedule_default_calendar_url)
 
+    def get_calendar_home_set(self) -> list[str]:
+        """Get the principal-relative calendar-home-set paths.
+
+        Returns: list of relative paths under the principal.
+        Raises: KeyError if not set
+        """
+        raise NotImplementedError(self.get_calendar_home_set)
+
+    def set_calendar_home_set(self, paths: list[str]) -> None:
+        """Set the principal-relative calendar-home-set paths.
+
+        Args:
+            paths: list of relative paths, or empty list to unset
+        """
+        raise NotImplementedError(self.set_calendar_home_set)
+
+    def get_addressbook_home_set(self) -> list[str]:
+        """Get the principal-relative addressbook-home-set paths.
+
+        Returns: list of relative paths under the principal.
+        Raises: KeyError if not set
+        """
+        raise NotImplementedError(self.get_addressbook_home_set)
+
+    def set_addressbook_home_set(self, paths: list[str]) -> None:
+        """Set the principal-relative addressbook-home-set paths.
+
+        Args:
+            paths: list of relative paths, or empty list to unset
+        """
+        raise NotImplementedError(self.set_addressbook_home_set)
+
 
 class FileBasedCollectionMetadata(CollectionMetadata):
     """Metadata for a configuration."""
@@ -317,4 +349,42 @@ class FileBasedCollectionMetadata(CollectionMetadata):
     def set_schedule_default_calendar_url(self, url):
         self._set_scheduling_option(
             "default-calendar-url", url, "Set schedule-default-calendar-URL."
+        )
+
+    def _set_principal_option(self, key: str, value: str | None, message: str) -> None:
+        if value is not None:
+            if not self._configparser.has_section("principal"):
+                self._configparser.add_section("principal")
+            self._configparser.set("principal", key, value)
+        else:
+            if self._configparser.has_option("principal", key):
+                self._configparser.remove_option("principal", key)
+            if self._configparser.has_section(
+                "principal"
+            ) and not self._configparser.options("principal"):
+                self._configparser.remove_section("principal")
+        self._save(message)
+
+    def _get_principal_path_list(self, key: str) -> list[str]:
+        if not self._configparser.has_option("principal", key):
+            raise KeyError
+        raw = self._configparser.get("principal", key)
+        return [p.strip() for p in raw.split(",") if p.strip()]
+
+    def get_calendar_home_set(self):
+        return self._get_principal_path_list("calendar-home-set")
+
+    def set_calendar_home_set(self, paths):
+        joined = ", ".join(paths) if paths else None
+        self._set_principal_option(
+            "calendar-home-set", joined, "Set calendar-home-set."
+        )
+
+    def get_addressbook_home_set(self):
+        return self._get_principal_path_list("addressbook-home-set")
+
+    def set_addressbook_home_set(self, paths):
+        joined = ", ".join(paths) if paths else None
+        self._set_principal_option(
+            "addressbook-home-set", joined, "Set addressbook-home-set."
         )

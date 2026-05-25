@@ -142,6 +142,52 @@ class MetadataTests:
         self.assertRaises(KeyError, self._config.get_timezone)
 
 
+class FileBasedPrincipalConfigTests(TestCase):
+    """Tests for the [principal] section in FileBasedCollectionMetadata."""
+
+    def setUp(self):
+        super().setUp()
+        self._config = FileBasedCollectionMetadata()
+
+    def test_calendar_home_set_missing(self):
+        self.assertRaises(KeyError, self._config.get_calendar_home_set)
+
+    def test_calendar_home_set_roundtrip(self):
+        self._config.set_calendar_home_set(["my-cals"])
+        self.assertEqual(["my-cals"], self._config.get_calendar_home_set())
+
+    def test_calendar_home_set_multiple(self):
+        self._config.set_calendar_home_set(["work", "home"])
+        self.assertEqual(["work", "home"], self._config.get_calendar_home_set())
+
+    def test_calendar_home_set_unset(self):
+        self._config.set_calendar_home_set(["my-cals"])
+        self._config.set_calendar_home_set([])
+        self.assertRaises(KeyError, self._config.get_calendar_home_set)
+
+    def test_addressbook_home_set_missing(self):
+        self.assertRaises(KeyError, self._config.get_addressbook_home_set)
+
+    def test_addressbook_home_set_roundtrip(self):
+        self._config.set_addressbook_home_set(["my-contacts"])
+        self.assertEqual(["my-contacts"], self._config.get_addressbook_home_set())
+
+    def test_addressbook_home_set_multiple(self):
+        self._config.set_addressbook_home_set(["personal", "work"])
+        self.assertEqual(["personal", "work"], self._config.get_addressbook_home_set())
+
+    def test_addressbook_home_set_unset(self):
+        self._config.set_addressbook_home_set(["my-contacts"])
+        self._config.set_addressbook_home_set([])
+        self.assertRaises(KeyError, self._config.get_addressbook_home_set)
+
+    def test_unset_removes_empty_section(self):
+        """Unsetting the last principal key drops the section."""
+        self._config.set_calendar_home_set(["my-cals"])
+        self._config.set_calendar_home_set([])
+        self.assertFalse(self._config._configparser.has_section("principal"))
+
+
 class FileMetadataTests(TestCase, MetadataTests):
     def setUp(self):
         super().setUp()

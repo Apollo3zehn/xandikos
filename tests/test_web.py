@@ -3025,3 +3025,81 @@ class OutboundIMIPTests(unittest.TestCase):
             for m in self.transport.sent
         ]
         self.assertEqual([("dave@elsewhere.example", "REQUEST")], recipients)
+
+
+class PrincipalHomeSetTests(unittest.TestCase):
+    """Per-principal calendar/addressbook-home-set overrides via .xandikos."""
+
+    def setUp(self):
+        super().setUp()
+        self.tempdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tempdir)
+        self.backend = SingleUserFilesystemBackend(self.tempdir)
+        self.backend.create_principal("/user", create_defaults=False)
+        self.principal = self.backend.get_resource("/user")
+
+    def test_defaults_when_no_config(self):
+        self.assertEqual(["calendars"], self.principal.get_calendar_home_set())
+        self.assertEqual(["contacts"], self.principal.get_addressbook_home_set())
+
+    def test_calendar_home_set_override(self):
+        self.principal.set_calendar_home_set(["my-cals"])
+        self.assertEqual(["my-cals"], self.principal.get_calendar_home_set())
+        # addressbook is unaffected.
+        self.assertEqual(["contacts"], self.principal.get_addressbook_home_set())
+
+    def test_addressbook_home_set_override(self):
+        self.principal.set_addressbook_home_set(["my-contacts"])
+        self.assertEqual(["my-contacts"], self.principal.get_addressbook_home_set())
+        self.assertEqual(["calendars"], self.principal.get_calendar_home_set())
+
+    def test_multiple_homes(self):
+        self.principal.set_calendar_home_set(["work-cal", "home-cal"])
+        self.principal.set_addressbook_home_set(["work-ab", "home-ab"])
+        self.assertEqual(
+            ["work-cal", "home-cal"], self.principal.get_calendar_home_set()
+        )
+        self.assertEqual(
+            ["work-ab", "home-ab"], self.principal.get_addressbook_home_set()
+        )
+
+    def test_override_persists_across_lookups(self):
+        """Override survives backend re-reading the .xandikos file."""
+        self.principal.set_calendar_home_set(["persistent"])
+        # Re-resolve the principal via the backend to bypass any
+        # in-memory caching.
+        fresh = self.backend.get_resource("/user")
+        self.assertEqual(["persistent"], fresh.get_calendar_home_set())
+
+    def test_unset_restores_default(self):
+        self.principal.set_calendar_home_set(["my-cals"])
+        self.principal.set_calendar_home_set([])
+        self.assertEqual(["calendars"], self.principal.get_calendar_home_set())
+
+    def test_create_principal_honours_pre_seeded_override(self):
+        """A pre-seeded .xandikos override drives the principal layout.
+
+        The realistic configure-from-file path: an operator writes a
+        ``.xandikos`` config under the principal directory before the
+        server creates the principal. ``create_principal`` then
+        creates home dirs at the configured paths instead of the
+        defaults.
+        """
+        import configparser
+
+        principal_dir = os.path.join(self.tempdir, "alice")
+        os.makedirs(principal_dir)
+        cp = configparser.ConfigParser()
+        cp.add_section("principal")
+        cp.set("principal", "calendar-home-set", "my-cals")
+        cp.set("principal", "addressbook-home-set", "my-contacts")
+        with open(os.path.join(principal_dir, ".xandikos"), "w") as f:
+            cp.write(f)
+
+        backend = SingleUserFilesystemBackend(self.tempdir)
+        backend.create_principal("/alice", create_defaults=True)
+        self.assertIsNotNone(backend.get_resource("/alice/my-cals/calendar"))
+        self.assertIsNotNone(backend.get_resource("/alice/my-contacts/addressbook"))
+        # Old default paths are not created.
+        self.assertIsNone(backend.get_resource("/alice/calendars"))
+        self.assertIsNone(backend.get_resource("/alice/contacts"))

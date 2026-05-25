@@ -5,6 +5,10 @@
    collection URL to get one merged ``.ics`` file suitable for consumers
    such as Google Calendar's "Add by URL". (Jelmer Vernooĳ, #164)
 
+ * Allow per-principal calendar-home-set and addressbook-home-set overrides
+   via the ``[principal]`` section of the principal's ``.xandikos`` config.
+   (Jelmer Vernooĳ, #17)
+
 0.4.0	2026-05-09
 
  * Support scheduling (iTIP/iMIP). (Jelmer Vernooĳ)
