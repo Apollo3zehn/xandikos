@@ -1,13 +1,27 @@
-0.4.1	UNRELEASED
+0.4.1	2026-05-25
 
  * Allow exporting a calendar collection as a single iCalendar feed.
    Issue a GET with ``Accept: text/calendar`` or append ``?export`` to the
    collection URL to get one merged ``.ics`` file suitable for consumers
    such as Google Calendar's "Add by URL". (Jelmer Vernooĳ, #164)
 
+ * Serve calendar collections over the ``webcal://`` scheme.
+   (Jelmer Vernooĳ)
+
  * Allow per-principal calendar-home-set and addressbook-home-set overrides
    via the ``[principal]`` section of the principal's ``.xandikos`` config.
    (Jelmer Vernooĳ, #17)
+
+ * Add ``--autocert`` option for self-signed HTTPS. (Jelmer Vernooĳ)
+
+ * Add ``--htpasswd`` flag for HTTP Basic authentication.
+   (Jelmer Vernooĳ)
+
+ * Check that VTODO with RRULE has DTSTART, and skip RRULE expansion
+   without DTSTART instead of crashing. (Jelmer Vernooĳ)
+
+ * Explicitly set PYTHONPATH in the container image so the WORKDIR no
+   longer has to be correct. (Jelmer Vernooĳ)
 
 0.4.0	2026-05-09
 
