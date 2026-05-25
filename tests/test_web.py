@@ -1539,27 +1539,29 @@ class ScheduleInboxDefaultCalendarTests(unittest.TestCase):
         # Refetch so the type-dispatch picks ScheduleInbox.
         self.assertIsNone(self._inbox().get_schedule_default_calendar_url())
 
-    def test_picks_first_calendar_when_multiple(self):
+    def test_returns_none_without_defaults(self):
+        # No --defaults: the principal has an inbox but no nominated default.
+        self.backend.create_principal("/alice")
+        self.backend.create_collection("/alice/inbox")
+        from xandikos.store import STORE_TYPE_CALENDAR, STORE_TYPE_SCHEDULE_INBOX
+
+        inbox_resource = self.backend.get_resource("/alice/inbox")
+        assert isinstance(inbox_resource, StoreBasedCollection)
+        inbox_resource.store.set_type(STORE_TYPE_SCHEDULE_INBOX)
+        # Even with calendars present, no default is picked unless
+        # explicitly nominated.
+        cal = self.backend.create_collection("/alice/calendars/work")
+        cal.store.set_type(STORE_TYPE_CALENDAR)
+        self.assertIsNone(self._inbox().get_schedule_default_calendar_url())
+
+    def test_principal_override(self):
         from xandikos.store import STORE_TYPE_CALENDAR
 
         self.backend.create_principal("/alice", create_defaults=True)
-        # create_defaults already made /alice/calendars/calendar; add a second.
         extra = self.backend.create_collection("/alice/calendars/work")
         extra.store.set_type(STORE_TYPE_CALENDAR)
 
-        url = self._inbox().get_schedule_default_calendar_url()
-        # The directory listing isn't ordered, but the result must point at
-        # one of the two calendars — not nothing, not something else.
-        self.assertIn(url, {"/alice/calendars/calendar", "/alice/calendars/work"})
-
-    def test_principal_override_wins_over_auto_pick(self):
-        from xandikos.store import STORE_TYPE_CALENDAR
-
-        self.backend.create_principal("/alice", create_defaults=True)
-        extra = self.backend.create_collection("/alice/calendars/work")
-        extra.store.set_type(STORE_TYPE_CALENDAR)
-
-        # Explicitly nominate the second calendar as the default.
+        # Override the seeded default.
         self._inbox().set_schedule_default_calendar_url("/alice/calendars/work")
 
         self.assertEqual(
@@ -1567,16 +1569,11 @@ class ScheduleInboxDefaultCalendarTests(unittest.TestCase):
             self._inbox().get_schedule_default_calendar_url(),
         )
 
-    def test_setting_none_restores_auto_pick(self):
+    def test_setting_none_unsets_default(self):
         self.backend.create_principal("/alice", create_defaults=True)
         inbox = self._inbox()
-        inbox.set_schedule_default_calendar_url("/alice/calendars/some-other")
         inbox.set_schedule_default_calendar_url(None)
-        # Auto-pick is back: /alice/calendars/calendar from create_defaults.
-        self.assertEqual(
-            "/alice/calendars/calendar",
-            self._inbox().get_schedule_default_calendar_url(),
-        )
+        self.assertIsNone(self._inbox().get_schedule_default_calendar_url())
 
     def test_override_persists_across_inbox_lookups(self):
         self.backend.create_principal("/alice", create_defaults=True)

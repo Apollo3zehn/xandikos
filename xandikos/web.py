@@ -596,31 +596,21 @@ class ScheduleInbox(StoreBasedCollection, scheduling.ScheduleInbox):
 
         RFC 6638 §9.2: the inbox advertises a single calendar where
         clients should look (and where scheduling deliveries land) by
-        default. The principal can override the choice via PROPPATCH;
-        without an override we walk each calendar-home the principal
-        advertises and pick the first calendar resource we find.
-        Returns ``None`` if the principal has no calendars yet.
+        default. The principal nominates the choice via PROPPATCH
+        (persisted in the principal's ``.xandikos`` config);
+        ``create_principal_defaults`` seeds it when called with
+        ``--defaults``. Returns ``None`` if no default has been set:
+        scheduling still works, clients just don't get a pre-chosen
+        target.
         """
         owning = scheduling.find_owning_principal(self.backend, self.relpath)
         if owning is None:
             return None
-        principal_path, principal = owning
-
-        # Check if the principal has explicitly nominated a default.
+        _, principal = owning
         try:
             return principal.get_schedule_default_calendar_url()
         except KeyError:
-            pass
-
-        for home in principal.get_calendar_home_set():
-            home_path = posixpath.join(principal_path, home)
-            home_resource = self.backend.get_resource(home_path)
-            if home_resource is None:
-                continue
-            for name, member in home_resource.members():
-                if caldav.CALENDAR_RESOURCE_TYPE in member.resource_types:
-                    return posixpath.join(home_path, name)
-        return None
+            return None
 
     def set_schedule_default_calendar_url(self, url: str | None) -> None:
         """Persist the default calendar choice on the owning principal.
@@ -2402,6 +2392,10 @@ def create_principal_defaults(backend, principal):
     else:
         resource.store.set_type(STORE_TYPE_CALENDAR)
         logger.info("Create calendar in %s.", resource.store.path)
+    try:
+        principal.get_schedule_default_calendar_url()
+    except KeyError:
+        principal.set_schedule_default_calendar_url("/" + calendar_path.lstrip("/"))
     addressbook_path = posixpath.join(
         principal.relpath,
         principal.get_addressbook_home_set()[0],
@@ -2414,11 +2408,9 @@ def create_principal_defaults(backend, principal):
     else:
         resource.store.set_type(STORE_TYPE_ADDRESSBOOK)
         logger.info("Create addressbook in %s.", resource.store.path)
-    calendar_path = posixpath.join(
-        principal.relpath, principal.get_schedule_inbox_url()
-    )
+    inbox_path = posixpath.join(principal.relpath, principal.get_schedule_inbox_url())
     try:
-        resource = backend.create_collection(calendar_path)
+        resource = backend.create_collection(inbox_path)
     except FileExistsError:
         pass
     else:
