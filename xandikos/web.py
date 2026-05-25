@@ -2527,6 +2527,15 @@ def add_parser(parser):
             "[%(default)s]"
         ),
     )
+    access_group.add_argument(
+        "--autocert",
+        action="store_true",
+        help=(
+            "Serve HTTPS using a self-signed certificate, generating one "
+            "under ~/.local/share/xandikos/certs if missing. "
+            "For development and testing only - do not use in production."
+        ),
+    )
     parser.add_argument(
         "-d",
         "--directory",
@@ -2665,6 +2674,31 @@ async def main(options, parser):
 
     from aiohttp import web
 
+    ssl_context = None
+    if options.autocert:
+        logger.warning(
+            "--autocert is enabled. The generated certificate is self-signed "
+            "and intended for development or testing only. Do NOT use this "
+            "in production; instead, run Xandikos behind a reverse proxy "
+            "(e.g. nginx, Apache, or Caddy) that terminates TLS using a "
+            "certificate from a trusted CA such as Let's Encrypt."
+        )
+        if socket_path is not None:
+            parser.error("--autocert cannot be combined with a unix domain socket")
+        if listen_socks:
+            parser.error(
+                "--autocert cannot be combined with systemd socket activation"
+            )
+        from . import autocert as autocert_mod
+
+        try:
+            cert_path, key_path = autocert_mod.ensure_self_signed(
+                hostname=listen_address or "localhost"
+            )
+        except RuntimeError as exc:
+            parser.error(str(exc))
+        ssl_context = autocert_mod.make_ssl_context(cert_path, key_path)
+
     if options.metrics_port == options.port:
         parser.error("Metrics port cannot be the same as the main port")
 
@@ -2729,7 +2763,9 @@ async def main(options, parser):
     elif socket_path:
         sites.append(web.UnixSite(runner, socket_path))
     else:
-        sites.append(web.TCPSite(runner, listen_address, listen_port))
+        sites.append(
+            web.TCPSite(runner, listen_address, listen_port, ssl_context=ssl_context)
+        )
 
     import signal
 
