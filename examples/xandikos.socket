@@ -2,7 +2,10 @@
 Description=Xandikos socket
 
 [Socket]
-ListenStream=/run/xandikos.sock
+# All Xandikos sockets live under /run/xandikos/ so the web socket,
+# the milter socket and the iMIP LMTP socket can share one directory.
+ListenStream=/run/xandikos/web.sock
+RuntimeDirectory=xandikos
 
 [Install]
 WantedBy=sockets.target

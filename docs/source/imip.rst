@@ -26,7 +26,9 @@ A scheduling exchange has two halves:
    - the ``xandikos import-imip`` subcommand, invoked from a Sieve
      pipe or any other delivery hook;
    - an LMTP listener built into ``xandikos serve`` that an MTA or
-     Sieve script can deliver to directly.
+     Sieve script can deliver to directly;
+   - a separate ``xandikos-milter`` daemon that Postfix or Sendmail
+     consults at SMTP intake time.
 
 Outbound iMIP traffic carries an ``Auto-Submitted: auto-generated``
 header (:rfc:`3834`); the inbound paths skip such messages so a
@@ -172,6 +174,189 @@ the principal's calendar-user-address-set. A ``serve`` instance has
 exactly one principal, and the unix socket is the access boundary
 (use ``--imip-listen-mode`` / ``--imip-listen-group`` to restrict it).
 Recipients are logged for audit.
+
+Inbound iMIP via Postfix milter
+-------------------------------
+
+``xandikos-milter`` is a standalone daemon that speaks the libmilter
+wire protocol Postfix and Sendmail use to consult external filters at
+SMTP intake. Every inbound message that flows through Postfix is
+inspected; if it carries a valid iMIP REQUEST, REPLY or CANCEL, the
+message is forwarded to a running Xandikos for storage in the schedule
+inbox. The milter never modifies, defers or rejects messages, so
+normal mailbox delivery is unaffected.
+
+Compared to the LMTP listener-by-itself this needs no Sieve glue: as
+soon as the milter is wired into ``smtpd_milters``, every iMIP message
+that lands on the host is harvested. The cost is that the milter sees
+*every* message Postfix accepts, so the per-message check has to stay
+cheap (it does: a quick MIME walk that bails out as soon as no
+``text/calendar`` part is found).
+
+The milter does not touch the on-disk store directly — it always hands
+off to a running Xandikos. Two transports are supported.
+
+LMTP (same-host, recommended)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Pair the milter with the existing ``--imip-listen`` LMTP listener.
+Postfix → milter → Xandikos LMTP is the cleanest setup when both
+services run on the same host, and reuses the same code path the
+existing Sieve hookup uses.
+
+.. code-block:: bash
+
+   xandikos serve \
+       --directory /var/lib/xandikos \
+       --imip-listen unix:/run/xandikos/imip.sock \
+       --imip-listen-mode 660 \
+       --imip-listen-group postfix
+
+   xandikos-milter \
+       --lmtp-socket unix:/run/xandikos/imip.sock \
+       --listen unix:/run/xandikos/milter.sock \
+       --listen-mode 660 \
+       --listen-group postfix
+
+HTTP (cross-host fallback)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When the milter and Xandikos live on different hosts, point the milter
+at the schedule-inbox URL over HTTPS, with HTTP Basic credentials read
+from a tightly-permissioned password file:
+
+.. code-block:: bash
+
+   xandikos-milter \
+       --server-url https://dav.example.net/user/inbox/ \
+       --username calendar \
+       --password-file /run/secrets/xandikos-password \
+       --listen unix:/run/xandikos/milter.sock \
+       --listen-mode 660 \
+       --listen-group postfix
+
+If Xandikos itself listens on a Unix socket on the same host as the
+milter, pass ``--unix-socket`` to dial it directly without going via
+TCP.
+
+Postfix wiring
+~~~~~~~~~~~~~~
+
+Once the milter is running, point Postfix at it from ``main.cf``:
+
+.. code-block:: text
+
+   # /etc/postfix/main.cf
+   smtpd_milters       = unix:/run/xandikos/milter.sock
+   non_smtpd_milters   = $smtpd_milters
+   milter_default_action = accept
+   milter_protocol     = 6
+
+   # Generous content timeout: the milter does an LMTP/HTTP round-trip
+   # to Xandikos at end-of-message. The 300s default is usually fine.
+   # milter_content_timeout = 300s
+
+Apply with:
+
+.. code-block:: bash
+
+   sudo postconf -e \
+       'smtpd_milters = unix:/run/xandikos/milter.sock' \
+       'non_smtpd_milters = $smtpd_milters' \
+       'milter_default_action = accept' \
+       'milter_protocol = 6'
+   sudo systemctl reload postfix
+
+What each setting does:
+
+``smtpd_milters``
+    The list of milters Postfix consults for mail arriving via
+    ``smtpd`` (the normal SMTP entry point — local *and* remote). The
+    ``unix:`` prefix selects a local socket; ``inet:host:port`` is the
+    TCP form.
+
+``non_smtpd_milters``
+    The list consulted for mail injected via ``sendmail(1)`` or the
+    ``pickup`` service — cron jobs, ``mail`` from a shell, etc. Setting
+    it to ``$smtpd_milters`` keeps iMIP coverage uniform regardless of
+    how a message enters the queue.
+
+``milter_default_action = accept``
+    What Postfix does if the milter is unreachable or times out. The
+    safe default is ``tempfail``, which defers the message; for an
+    iMIP-harvesting milter that is far too aggressive — a Xandikos
+    outage would block every inbound mail on the host. ``accept`` lets
+    Postfix keep delivering normally and only loses the iMIP
+    harvesting until the milter is back. **Always set this for
+    xandikos-milter.**
+
+``milter_protocol = 6``
+    Pins the wire-protocol version Postfix offers. ``xandikos-milter``
+    speaks up to v6; pinning it here keeps the negotiated version
+    predictable across Postfix upgrades.
+
+Socket permissions
+""""""""""""""""""
+
+Postfix runs as the ``postfix`` user (or ``smtpd``-chrooted into
+``/var/spool/postfix``) and dials the Unix socket as that identity.
+The ``--listen-mode 660 --listen-group postfix`` flags shown in the
+recipes above give Postfix read/write access while keeping the socket
+unreadable to anyone else. If your Postfix runs chrooted, place the
+socket inside the Postfix queue directory (for example
+``/var/spool/postfix/private/xandikos-milter``) and reference it
+without the chroot prefix:
+
+.. code-block:: text
+
+   smtpd_milters = unix:private/xandikos-milter
+
+Verifying
+"""""""""
+
+After ``postfix reload``, check the effective configuration:
+
+.. code-block:: bash
+
+   postconf -n | grep -E '^(smtpd|non_smtpd)_milters|^milter_'
+
+Watch the milter's own log to confirm Postfix actually connects when
+new mail arrives:
+
+.. code-block:: text
+
+   xandikos milter listening on unix:/run/xandikos/milter.sock, ...
+   Forwarded iMIP REQUEST message <abc@host> to /run/xandikos/imip.sock ...
+
+If the connection is failing, check ``journalctl -u postfix`` for
+``connect to milter service`` errors — usually a socket-permission
+problem.
+
+Per-recipient scoping
+"""""""""""""""""""""
+
+A single ``xandikos-milter`` instance harvests iMIP for the principal
+its transport is configured against. If your Postfix serves multiple
+domains and only some should funnel iMIP into Xandikos, restrict the
+milter with ``smtpd_milter_maps`` (Postfix ≥ 3.2):
+
+.. code-block:: text
+
+   # /etc/postfix/main.cf
+   smtpd_milter_maps = inline:{ calendar.example.com = unix:/run/xandikos/milter.sock }
+
+Mail to domains not listed in the map skips the milter entirely.
+
+Reference
+"""""""""
+
+A copy-pasteable snippet lives in ``examples/postfix-milter.example``.
+As with ``--imip-listen``, the milter's Unix socket is the access
+boundary between Postfix and Xandikos: use ``--listen-mode`` /
+``--listen-group`` to restrict who can talk to it. Equivalent
+environment variables for Docker: ``XANDIKOS_MILTER_LMTP_SOCKET``,
+``XANDIKOS_MILTER_SERVER_URL``, ``XANDIKOS_MILTER_LISTEN``,
+``XANDIKOS_MILTER_LISTEN_MODE``, ``XANDIKOS_MILTER_LISTEN_GROUP``.
 
 Loop avoidance
 --------------

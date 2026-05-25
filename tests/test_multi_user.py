@@ -493,11 +493,11 @@ class AddParserTests(unittest.TestCase):
                 "-d",
                 "/tmp/test",
                 "-l",
-                "/var/run/xandikos.sock",
+                "/run/xandikos/web.sock",
             ]
         )
 
-        self.assertEqual(args.listen_address, "/var/run/xandikos.sock")
+        self.assertEqual(args.listen_address, "/run/xandikos/web.sock")
 
     def test_add_parser_hide_principals_flag(self):
         """Test parsing hide-principals flag."""

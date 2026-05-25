@@ -23,7 +23,7 @@ Basic Options
     Address to listen on (default: localhost). Can also be a Unix socket path.
 
     Example: ``--listen-address 0.0.0.0``
-    Example: ``--listen-address /var/run/xandikos.sock``
+    Example: ``--listen-address /run/xandikos/web.sock``
 
 ``--route-prefix``
     Path prefix for the application. Use this when running behind a reverse proxy on a subpath.
@@ -184,7 +184,7 @@ Behind nginx on Subpath
    xandikos \
      --directory /var/lib/xandikos \
      --route-prefix /dav \
-     --listen-address /var/run/xandikos.sock \
+     --listen-address /run/xandikos/web.sock \
      --defaults
 
 Production with Logging
@@ -228,7 +228,10 @@ Create ``/etc/systemd/system/xandikos.socket``:
    Description=Xandikos CalDAV/CardDAV server socket
 
    [Socket]
-   ListenStream=/var/run/xandikos.sock
+   # All Xandikos sockets live under /run/xandikos/ so the web,
+   # milter and iMIP LMTP sockets share one directory.
+   ListenStream=/run/xandikos/web.sock
+   RuntimeDirectory=xandikos
 
    [Install]
    WantedBy=sockets.target
@@ -245,7 +248,7 @@ Create ``/etc/systemd/system/xandikos.service``:
    Type=notify
    ExecStart=/usr/bin/xandikos \
      --directory /var/lib/xandikos \
-     --listen-address /var/run/xandikos.sock \
+     --listen-address /run/xandikos/web.sock \
      --defaults
    User=xandikos
    Group=xandikos
