@@ -1,3 +1,19 @@
+0.4.3	2026-05-26
+
+ * milter: don't tell the MTA to skip RCPT events, fixing rejection of
+   recipients that aren't local Xandikos principals. (Jelmer Vernooĳ)
+
+ * store: derive ``require_unique_uids`` from the store type rather than
+   storing it separately. (Jelmer Vernooĳ)
+
+ * imip: log inbox storage and auto-apply outcomes. (Jelmer Vernooĳ)
+
+ * web: nominate the default scheduling calendar in ``--defaults`` rather
+   than at lookup time. (Jelmer Vernooĳ)
+
+ * web: alias ``xandikos.web`` to ``__main__`` so running the module as a
+   script no longer double-imports. (Jelmer Vernooĳ)
+
 0.4.2	2026-05-25
 
  * Add ``xandikos-milter``, a Postfix milter that delivers inbound iMIP
