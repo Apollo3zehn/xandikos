@@ -199,6 +199,62 @@ END:VCALENDAR
             list(validate_calendar(fi.calendar, strict=True)),
         )
 
+    def test_vtimezone_without_rules(self):
+        # RFC 5545 3.6.5: a VTIMEZONE must contain at least one STANDARD or
+        # DAYLIGHT subcomponent. Google Calendar exports sometimes emit a
+        # VTIMEZONE with only TZID, which makes ical4j (DAVx5) crash with an
+        # NPE in ZoneRulesBuilder.build.
+        cal_data = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//Test//EN
+BEGIN:VTIMEZONE
+TZID:Europe/London
+X-LIC-LOCATION:Europe/London
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:vtimezone-no-rules@example.com
+DTSTAMP:20260526T002507Z
+DTSTART;TZID=Europe/London:20260526T000000
+DTEND;TZID=Europe/London:20260526T010000
+SUMMARY:test
+END:VEVENT
+END:VCALENDAR
+"""
+        fi = ICalendarFile([cal_data], "text/calendar")
+        fi.validate()
+        self.assertEqual([], list(validate_calendar(fi.calendar, strict=False)))
+        self.assertEqual(
+            ["VTIMEZONE requires at least one STANDARD or DAYLIGHT subcomponent"],
+            list(validate_calendar(fi.calendar, strict=True)),
+        )
+        # normalized() rebuilds the VTIMEZONE from zoneinfo for known TZIDs.
+        normalized = b"".join(fi.normalized())
+        from icalendar.cal import Calendar
+
+        roundtripped = Calendar.from_ical(normalized)
+        vtimezones = [c for c in roundtripped.subcomponents if c.name == "VTIMEZONE"]
+        self.assertEqual(1, len(vtimezones))
+        self.assertEqual("Europe/London", str(vtimezones[0]["TZID"]))
+        rule_kinds = {c.name for c in vtimezones[0].subcomponents}
+        self.assertEqual({"STANDARD", "DAYLIGHT"}, rule_kinds)
+
+    def test_vtimezone_unknown_tzid_dropped_on_normalize(self):
+        # An empty VTIMEZONE whose TZID can't be resolved via zoneinfo is
+        # dropped on normalize. In practice python-icalendar refuses to even
+        # load such input, so this exercises the helper directly: it's a
+        # defensive fallback against future paths that construct a Calendar
+        # without going through Calendar.from_ical.
+        from icalendar.cal import Calendar, Timezone
+
+        from xandikos.icalendar import _normalize_empty_vtimezones
+
+        cal = Calendar()
+        tz = Timezone()
+        tz.add("TZID", "Customized Time Zone")
+        cal.add_component(tz)
+        self.assertTrue(_normalize_empty_vtimezones(cal))
+        self.assertEqual([], [c for c in cal.subcomponents if c.name == "VTIMEZONE"])
+
     def test_invalid_character(self):
         fi = ICalendarFile([EXAMPLE_VCALENDAR_INVALID_CHAR], "text/calendar")
         self.assertRaises(InvalidFileContents, fi.validate)

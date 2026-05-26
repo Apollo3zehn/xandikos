@@ -27,7 +27,7 @@ from typing import Any, Protocol, overload
 from zoneinfo import ZoneInfo
 
 import dateutil.rrule
-from icalendar.cal import Calendar, Component
+from icalendar.cal import Calendar, Component, Timezone
 from icalendar.parser import Parameters
 from icalendar.prop import (
     TypesFactory,
@@ -144,8 +144,55 @@ def validate_component(comp, strict=False):
             # together with RRULE/RDATE/EXDATE, so RRULE without DTSTART has
             # no defined meaning.
             yield f"RRULE in {comp.name} requires DTSTART"
+        if comp.name == "VTIMEZONE" and not any(
+            sub.name in ("STANDARD", "DAYLIGHT") for sub in comp.subcomponents
+        ):
+            # RFC 5545 3.6.5: a VTIMEZONE MUST include at least one definition
+            # of a STANDARD or DAYLIGHT subcomponent. ical4j (used by DAVx5)
+            # raises a NullPointerException for VTIMEZONEs without rules.
+            yield "VTIMEZONE requires at least one STANDARD or DAYLIGHT subcomponent"
     for subcomp in comp.subcomponents:
         yield from validate_component(subcomp, strict=strict)
+
+
+def _normalize_empty_vtimezones(cal: Calendar) -> bool:
+    """Rewrite VTIMEZONE blocks that lack STANDARD/DAYLIGHT subcomponents.
+
+    Some calendar clients (notably Google Calendar exports) emit a VTIMEZONE
+    with just a TZID and no STANDARD or DAYLIGHT subcomponent. This violates
+    RFC 5545 3.6.5 and makes ical4j (used by DAVx5) crash with a
+    NullPointerException in ZoneRulesBuilder.build.
+
+    For each such block, if the TZID resolves via zoneinfo, replace it with a
+    synthesized VTIMEZONE built from the IANA tz database. Otherwise drop the
+    VTIMEZONE entirely; clients with their own zoneinfo database can still
+    resolve TZ-qualified DTSTART values.
+
+    Returns True if any change was made.
+    """
+    new_subcomponents: list[Component] = []
+    changed = False
+    for sub in cal.subcomponents:
+        if sub.name == "VTIMEZONE" and not any(
+            child.name in ("STANDARD", "DAYLIGHT") for child in sub.subcomponents
+        ):
+            tzid = sub.get("TZID")
+            if tzid is not None:
+                try:
+                    info = ZoneInfo(str(tzid))
+                except (KeyError, ValueError, OSError):
+                    info = None
+                if info is not None:
+                    new_subcomponents.append(Timezone.from_tzinfo(info, tzid=str(tzid)))
+                    changed = True
+                    continue
+            # Drop the empty VTIMEZONE; clients fall back to their own tz data.
+            changed = True
+            continue
+        new_subcomponents.append(sub)
+    if changed:
+        cal.subcomponents = new_subcomponents
+    return changed
 
 
 def calendar_component_delta(old_cal, new_cal):
@@ -1550,7 +1597,9 @@ class ICalendarFile(File):
 
     def normalized(self):
         """Return a normalized version of the file."""
-        return [self.calendar.to_ical()]
+        cal = self.calendar
+        _normalize_empty_vtimezones(cal)
+        return [cal.to_ical()]
 
     @property
     def calendar(self):
