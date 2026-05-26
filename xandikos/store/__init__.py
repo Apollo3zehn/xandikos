@@ -307,6 +307,17 @@ class Store:
         self.index_manager = AutoIndexManager(self.index, threshold=index_threshold)
         self.double_check_indexes = double_check_indexes
 
+    @property
+    def require_unique_uids(self) -> bool:
+        """Whether import_one should reject objects whose UID already exists.
+
+        True for calendars and addressbooks (where UID is the primary key
+        for de-duplication); False for schedule inboxes, which are an
+        append-only log of iTIP messages — multiple REQUEST/CANCEL/REPLY
+        deliveries for the same UID are expected and must all be kept.
+        """
+        return self.get_type() != STORE_TYPE_SCHEDULE_INBOX
+
     def load_extra_file_handler(self, file_handler: type[File]) -> None:
         self.extra_file_handlers[file_handler.content_type] = file_handler
         new_keys = set(file_handler.default_index_keys())

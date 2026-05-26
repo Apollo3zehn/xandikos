@@ -263,7 +263,6 @@ class GitStore(Store):
         repo,
         *,
         ref: bytes = b"HEAD",
-        check_for_duplicate_uids=True,
         parsed_file_cache_size: int | None = None,
         **kwargs,
     ) -> None:
@@ -274,7 +273,6 @@ class GitStore(Store):
         self.repo._autogc_disabled = True
         # Maps uids to (sha, fname)
         self._uid_to_fname: dict[str, tuple[bytes, str]] = {}
-        self._check_for_duplicate_uids = check_for_duplicate_uids
         # Set of blob ids that have already been scanned
         self._fname_to_uid: dict[str, tuple[str, str]] = {}
         # Guards mutations of the uid maps above so that concurrent
@@ -360,7 +358,7 @@ class GitStore(Store):
         return self.repo.path
 
     def _check_duplicate(self, uid, name, replace_etag):
-        if uid is not None and self._check_for_duplicate_uids:
+        if uid is not None and self.require_unique_uids:
             self._scan_uids()
             try:
                 (existing_name, _) = self._uid_to_fname[uid]
