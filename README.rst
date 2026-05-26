@@ -30,6 +30,10 @@ The following standards are implemented:
 - :RFC:`6047` (iCalendar Message-Based Interoperability Protocol — iMIP) -
   *implemented for REQUEST, REPLY, CANCEL; outbound delivery is
   off by default and configured via* ``--imip-send``
+- `draft-bitfire-webdav-push <https://github.com/bitfireAT/webdav-push/>`_
+  (WebDAV-Push) - *implemented; enabled with* ``--webdav-push``.
+  *Uses Web Push (RFC 8030) with VAPID (RFC 8292) and aes128gcm
+  message encryption (RFC 8291).*
 
 The following standards are not implemented:
 
