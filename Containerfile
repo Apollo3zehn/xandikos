@@ -34,6 +34,13 @@
 #                   "host:port".
 #   MILTER_LISTEN_MODE / MILTER_LISTEN_GROUP - permissions for the milter
 #                   socket.
+#   WEBDAV_PUSH - Enable WebDAV-Push (draft-bitfire-webdav-push). Enabled
+#                 by default; set to "false" or "0" to disable. On first
+#                 start a VAPID keypair is generated under
+#                 <state-dir>/vapid/.
+#   STATE_DIR - Directory for server state (VAPID keys, autocert
+#               certificates, push subscription index). Defaults to
+#               /data/state inside the container.
 #
 # Volumes:
 #   /data    - calendar/contact storage (always required)
@@ -46,7 +53,7 @@
 FROM debian:sid-slim
 LABEL maintainer="jelmer@jelmer.uk"
 RUN apt-get update && \
-    apt-get -y install --no-install-recommends python3-icalendar python3-pip python3-jinja2 python3-defusedxml python3-aiohttp python3-vobject python3-aiohttp-openmetrics python3-qrcode python3-cryptography python3-bcrypt curl && \
+    apt-get -y install --no-install-recommends python3-icalendar python3-pip python3-jinja2 python3-defusedxml python3-aiohttp python3-vobject python3-aiohttp-openmetrics python3-qrcode python3-cryptography python3-bcrypt python3-pywebpush python3-py-vapid curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/ && \
     groupadd -g 1000 xandikos && \
