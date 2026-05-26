@@ -122,14 +122,10 @@ SMFIP_NOUNKNOWN = 0x100
 SMFIP_NODATA = 0x200
 SMFIP_SKIP = 0x400
 
-# We need HEADER, EOH and BODY. Everything else can be elided.
+# We need RCPT (to log/route by envelope recipient), HEADER, EOH and
+# BODY. Everything else can be elided.
 SMFI_PROTOCOL_FLAGS = (
-    SMFIP_NOCONNECT
-    | SMFIP_NOHELO
-    | SMFIP_NOMAIL
-    | SMFIP_NORCPT
-    | SMFIP_NOUNKNOWN
-    | SMFIP_NODATA
+    SMFIP_NOCONNECT | SMFIP_NOHELO | SMFIP_NOMAIL | SMFIP_NOUNKNOWN | SMFIP_NODATA
 )
 
 # Maximum frame size we will accept from the MTA. Postfix default is

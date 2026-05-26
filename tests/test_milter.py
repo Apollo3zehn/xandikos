@@ -497,6 +497,13 @@ class HandleConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(milter.SMFIC_OPTNEG, responses[0][0])
         self.assertEqual([], handler.calls)
 
+    def test_protocol_flags_request_rcpt(self):
+        # SMFIP_NORCPT in SMFI_PROTOCOL_FLAGS would tell Postfix to skip
+        # RCPT events, leaving handle_message with an empty recipient
+        # list. We log envelope recipients and may route by them, so
+        # RCPT must not be elided.
+        self.assertEqual(0, milter.SMFI_PROTOCOL_FLAGS & milter.SMFIP_NORCPT)
+
 
 class FrameParsingTests(unittest.TestCase):
     def test_parse_header_splits_name_and_value(self):
