@@ -61,6 +61,7 @@ from xandikos import (
     timezones,
     webcal,
     webdav,
+    webdav_push,
     xmpp,
 )
 from xandikos.fs import FilesystemBackend, open_store_from_path
@@ -126,6 +127,20 @@ WELLKNOWN_DAV_PATHS = {
     caldav.WELLKNOWN_CALDAV_PATH,
     carddav.WELLKNOWN_CARDDAV_PATH,
 }
+
+
+def default_state_dir() -> str:
+    """Return the default directory for Xandikos server state.
+
+    Uses ``$XDG_DATA_HOME/xandikos`` per the XDG Base Directory spec,
+    falling back to ``~/.local/share/xandikos`` when the variable is
+    unset or empty.
+    """
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "share"
+    )
+    return os.path.join(data_home, "xandikos")
+
 
 CALENDAR_HOME_SET = ["calendars"]
 ADDRESSBOOK_HOME_SET = ["contacts"]
@@ -213,12 +228,16 @@ class ObjectResource(webdav.Resource):
         content_type: str,
         etag: str,
         file: File | None = None,
+        parent: "StoreBasedCollection | None" = None,
     ) -> None:
         self.store = store
         self.name = name
         self.etag = etag
         self.content_type = content_type
         self._file = file
+        # Parent collection, when known. Used so this resource can notify
+        # the collection of its own changes (e.g. successful PUTs).
+        self._parent = parent
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.store!r}, {self.name!r}, {self.etag!r}, {self.get_content_type()!r})"
@@ -255,6 +274,8 @@ class ObjectResource(webdav.Resource):
             ) from exc
         except LockedError as exc:
             raise webdav.ResourceLocked() from exc
+        if self._parent is not None:
+            await self._parent.notify_content_changed()
         return create_strong_etag(etag)
 
     def get_content_language(self) -> str:
@@ -315,11 +336,50 @@ class ObjectResource(webdav.Resource):
         return create_strong_etag(signature.hex())
 
 
+async def _run_change_listener(awaitable) -> None:
+    try:
+        await awaitable
+    except Exception:  # noqa: BLE001
+        logger.exception("change listener task failed")
+
+
 class StoreBasedCollection:
+    # Global change listeners. Each entry is a callable
+    # ``(collection, kind, **details) -> Awaitable | None`` where
+    # ``kind`` is ``"content"`` or ``"property"``. Async returns are
+    # scheduled on the running event loop. Errors are logged and never
+    # propagated to the originating request.
+    _change_listeners: list = []
+
     def __init__(self, backend, relpath, store) -> None:
         self.backend = backend
         self.relpath = relpath
         self.store = store
+
+    @classmethod
+    def add_change_listener(cls, callback) -> None:
+        """Register a global change listener for every store-based collection."""
+        cls._change_listeners.append(callback)
+
+    def _dispatch_change(self, kind: str, **details) -> None:
+        for cb in list(self._change_listeners):
+            try:
+                result = cb(self, kind, **details)
+            except Exception:  # noqa: BLE001
+                logger.exception("change listener raised")
+                continue
+            if result is None:
+                continue
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                if hasattr(result, "close"):
+                    result.close()
+                continue
+            loop.create_task(_run_change_listener(result))
+
+    async def notify_content_changed(self) -> None:
+        self._dispatch_change("content")
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.store!r})"
@@ -367,7 +427,9 @@ class StoreBasedCollection:
         etag: str,
         file: File | None = None,
     ) -> webdav.Resource:
-        return ObjectResource(self.store, name, content_type, etag, file=file)
+        return ObjectResource(
+            self.store, name, content_type, etag, file=file, parent=self
+        )
 
     def _get_subcollection(self, name: str) -> webdav.Collection:
         return self.backend.get_resource(posixpath.join(self.relpath, name))
@@ -380,6 +442,7 @@ class StoreBasedCollection:
 
     def set_displayname(self, displayname: str) -> None:
         self.store.set_displayname(displayname)
+        self._dispatch_change("property", changed_properties=("{DAV:}displayname",))
 
     def get_sync_token(self) -> str:
         return self.store.get_ctag()
@@ -430,6 +493,7 @@ class StoreBasedCollection:
                 # TODO: Properly allow removing subcollections
                 # _subcoll.destroy()
                 shutil.rmtree(os.path.join(self.store.path, name))
+        self._dispatch_change("content")
 
     async def create_member(
         self,
@@ -469,6 +533,7 @@ class StoreBasedCollection:
         except LockedError as exc:
             raise webdav.ResourceLocked() from exc
         await self.post_create_member_hook(name, contents, content_type)
+        self._dispatch_change("content")
         return (name, create_strong_etag(etag))
 
     async def post_create_member_hook(
@@ -2305,8 +2370,16 @@ class SingleUserFilesystemBackend(FilesystemBackend):
 class XandikosApp(webdav.WebDAVApp):
     """A wsgi App that provides a Xandikos web server."""
 
-    def __init__(self, backend, current_user_principal, strict=True) -> None:
+    def __init__(
+        self,
+        backend,
+        current_user_principal,
+        strict=True,
+        vapid_keystore: "webdav_push.VapidKeystore | None" = None,
+        state_dir: str | None = None,
+    ) -> None:
         super().__init__(backend, strict=strict)
+        self.state_dir = state_dir
 
         def get_current_user_principal(env):
             try:
@@ -2400,6 +2473,11 @@ class XandikosApp(webdav.WebDAVApp):
                 caldav.MkcalendarMethod(),
             ]
         )
+        if vapid_keystore is not None:
+            assert state_dir is not None, (
+                "state_dir is required when WebDAV-Push is enabled"
+            )
+            webdav_push.install(self, vapid_keystore, state_dir=state_dir)
 
     async def _handle_request(self, request, environ, start_response=None):
         if start_response and GIT_PATH in request.path.split(posixpath.sep):
@@ -2476,6 +2554,38 @@ class RedirectDavHandler:
         from aiohttp import web
 
         return web.HTTPFound(self._dav_root)
+
+
+def _make_subscription_delete_handler(main_app: "XandikosApp"):
+    """Build the aiohttp handler for ``DELETE ${prefix}/.subscriptions/<id>``."""
+    from aiohttp import web
+
+    async def handler(request):
+        sub_id = request.match_info["sub_id"]
+        # Mirror what WebDAVApp._handle_request does for REMOTE_USER so
+        # check_access sees the authenticated principal.
+        environ: dict = {"SCRIPT_NAME": ""}
+        remote_user = request.headers.get("X-Remote-User")
+        if remote_user and hasattr(main_app.backend, "set_principal"):
+            environ["REMOTE_USER"] = remote_user
+            main_app.backend.set_principal(remote_user)
+        status, reason = await webdav_push.delete_subscription(
+            main_app, environ, sub_id
+        )
+        return web.Response(status=status, reason=reason)
+
+    return handler
+
+
+def _maybe_mount_subscription_route(aiohttp_app, main_app: "XandikosApp") -> None:
+    """Mount the WebDAV-Push DELETE route when push is enabled."""
+    if webdav_push.FEATURE not in main_app.extra_features:
+        return
+    aiohttp_app.router.add_route(
+        "DELETE",
+        "/" + webdav_push.SUBSCRIPTION_ROUTE + "/{sub_id}",
+        _make_subscription_delete_handler(main_app),
+    )
 
 
 MDNS_NAME = "Xandikos CalDAV/CardDAV service"
@@ -2583,6 +2693,7 @@ def run_simple_server(
 
     if route_prefix.strip("/"):
         xandikos_app = web.Application()
+        _maybe_mount_subscription_route(xandikos_app, main_app)
         xandikos_app.router.add_route("*", "/{path_info:.*}", xandikos_handler)
 
         async def redirect_to_subprefix(request):
@@ -2591,6 +2702,7 @@ def run_simple_server(
         app.router.add_route("*", "/", redirect_to_subprefix)
         app.add_subapp(route_prefix, xandikos_app)
     else:
+        _maybe_mount_subscription_route(app, main_app)
         app.router.add_route("*", "/{path_info:.*}", xandikos_handler)
 
     web.run_app(app, port=port, host=listen_address, path=socket_path)
@@ -2708,7 +2820,7 @@ def add_parser(parser):
         action="store_true",
         help=(
             "Serve HTTPS using a self-signed certificate, generating one "
-            "under ~/.local/share/xandikos/certs if missing. "
+            "under <state-dir>/certs if missing. "
             "For development and testing only - do not use in production."
         ),
     )
@@ -2766,6 +2878,29 @@ def add_parser(parser):
         dest="strict",
         help=("Enable workarounds for buggy CalDAV/CardDAV client implementations."),
         default=True,
+    )
+    parser.add_argument(
+        "--state-dir",
+        dest="state_dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Directory for Xandikos server state (TLS certificates, "
+            "VAPID keys, ...). Distinct from --directory, which stores "
+            "user calendars and address books. "
+            "Defaults to $XDG_DATA_HOME/xandikos."
+        ),
+    )
+    parser.add_argument(
+        "--webdav-push",
+        dest="webdav_push",
+        action="store_true",
+        help=(
+            "Enable WebDAV-Push (draft-bitfire-webdav-push). A VAPID "
+            "(RFC 8292) keypair is generated under <state-dir>/vapid/ "
+            "on first start. Requires the 'webdav-push' optional "
+            "dependencies."
+        ),
     )
     parser.add_argument("--debug", action="store_true", help="Print debug messages")
     # Hidden arguments. These may change without notice in between releases,
@@ -2832,10 +2967,24 @@ async def main(options, parser):
     version_str = ", ".join(f"{pkg} {ver}" for pkg, ver in _get_package_versions())
     logger.info("%s", version_str)
 
+    state_dir = options.state_dir or default_state_dir()
+
+    vapid_keystore: webdav_push.VapidKeystore | None = None
+    if options.webdav_push:
+        try:
+            vapid_keystore = webdav_push.VapidKeystore(os.path.join(state_dir, "vapid"))
+            # Trigger key load/generation eagerly so misconfiguration
+            # surfaces at startup rather than on the first PROPFIND.
+            _ = vapid_keystore.public_key_b64
+        except RuntimeError as exc:
+            parser.error(str(exc))
+
     main_app = XandikosApp(
         backend,
         current_user_principal=options.current_user_principal,
         strict=options.strict,
+        vapid_keystore=vapid_keystore,
+        state_dir=state_dir,
     )
 
     async def xandikos_handler(request):
@@ -2882,7 +3031,8 @@ async def main(options, parser):
 
         try:
             cert_path, key_path = autocert_mod.ensure_self_signed(
-                hostname=listen_address or "localhost"
+                os.path.join(state_dir, "certs"),
+                hostname=listen_address or "localhost",
             )
         except RuntimeError as exc:
             parser.error(str(exc))
@@ -2937,6 +3087,7 @@ async def main(options, parser):
         xandikos_app = web.Application()
         if htpasswd_file is not None:
             xandikos_app.middlewares.append(basic_auth_middleware(htpasswd_file))
+        _maybe_mount_subscription_route(xandikos_app, main_app)
         xandikos_app.router.add_route("*", "/{path_info:.*}", xandikos_handler)
 
         async def redirect_to_subprefix(request):
@@ -2947,6 +3098,7 @@ async def main(options, parser):
     else:
         if htpasswd_file is not None:
             app.middlewares.append(basic_auth_middleware(htpasswd_file))
+        _maybe_mount_subscription_route(app, main_app)
         app.router.add_route("*", "/{path_info:.*}", xandikos_handler)
 
     if options.avahi:

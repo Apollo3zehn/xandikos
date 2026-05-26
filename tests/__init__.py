@@ -54,6 +54,7 @@ def test_suite():
         "timezones",
         "vcard",
         "webdav",
+        "webdav_push",
         "web",
         "wsgi",
         "wsgi_helpers",
