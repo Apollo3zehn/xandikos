@@ -170,7 +170,7 @@ def _normalize_empty_vtimezones(cal: Calendar) -> bool:
 
     Returns True if any change was made.
     """
-    new_subcomponents = []
+    new_subcomponents: list[Component] = []
     changed = False
     for sub in cal.subcomponents:
         if sub.name == "VTIMEZONE" and not any(
