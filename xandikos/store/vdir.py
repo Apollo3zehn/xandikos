@@ -32,6 +32,7 @@ import uuid
 
 from . import (
     MIMETYPES,
+    VALID_STORE_TYPES,
     DuplicateUidError,
     InvalidETag,
     InvalidFileContents,
@@ -57,12 +58,10 @@ class VdirStore(Store):
     def __init__(
         self,
         path,
-        check_for_duplicate_uids=True,
         parsed_file_cache_size: int | None = None,
     ) -> None:
         super().__init__(MemoryIndex())
         self.path = path
-        self._check_for_duplicate_uids = check_for_duplicate_uids
         # Set of blob ids that have already been scanned
         self._fname_to_uid: dict[str, str] = {}
         # Maps uids to (sha, fname)
@@ -182,7 +181,7 @@ class VdirStore(Store):
             del self._fname_to_uid[name]
 
     def _check_duplicate(self, uid, name, replace_etag):
-        if uid is not None and self._check_for_duplicate_uids:
+        if uid is not None and self.require_unique_uids:
             self._scan_uids()
             try:
                 (existing_name, _) = self._uid_to_fname[uid]
@@ -331,6 +330,17 @@ class VdirStore(Store):
         Returns: Comment
         """
         raise NotImplementedError(self.get_comment)
+
+    def set_type(self, store_type: str) -> None:
+        if store_type not in VALID_STORE_TYPES:
+            raise ValueError(f"Invalid store type {store_type!r}")
+        self._write_metadata("xandikos-type", store_type)
+
+    def get_type(self) -> str:
+        store_type = self._read_metadata("xandikos-type")
+        if store_type in VALID_STORE_TYPES:
+            return store_type
+        return super().get_type()
 
     def _read_metadata(self, name):
         try:

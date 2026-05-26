@@ -35,6 +35,8 @@ from xandikos.store import (
     Filter,
     InvalidETag,
     NoSuchItem,
+    STORE_TYPE_CALENDAR,
+    STORE_TYPE_SCHEDULE_INBOX,
     Store,
     start_eager_indexing,
 )
@@ -218,6 +220,20 @@ class BaseStoreTest:
             "text/calendar",
             [EXAMPLE_VCALENDAR1],
         )
+
+    def test_require_unique_uids_follows_type(self):
+        gc = self.create_store()
+        gc.set_type(STORE_TYPE_CALENDAR)
+        self.assertTrue(gc.require_unique_uids)
+        gc.set_type(STORE_TYPE_SCHEDULE_INBOX)
+        self.assertFalse(gc.require_unique_uids)
+
+    def test_schedule_inbox_allows_duplicate_uid(self):
+        gc = self.create_store()
+        gc.set_type(STORE_TYPE_SCHEDULE_INBOX)
+        (name1, _) = gc.import_one("foo.ics", "text/calendar", [EXAMPLE_VCALENDAR1])
+        (name2, _) = gc.import_one("bar.ics", "text/calendar", [EXAMPLE_VCALENDAR1])
+        self.assertNotEqual(name1, name2)
 
     def test_import_one_duplicate_name(self):
         gc = self.create_store()

@@ -24,6 +24,7 @@ from collections.abc import Sequence
 
 from . import (
     MIMETYPES,
+    VALID_STORE_TYPES,
     DuplicateUidError,
     InvalidETag,
     NoSuchItem,
@@ -37,11 +38,10 @@ from .index import MemoryIndex
 class MemoryStore(Store):
     """Pure in-memory store implementation."""
 
-    def __init__(self, *, check_for_duplicate_uids=True):
+    def __init__(self):
         super().__init__(MemoryIndex())
         self._items = {}  # name -> (content_type, data, etag)
         self._etag_counter = 0
-        self._check_for_duplicate_uids = check_for_duplicate_uids
         # Maps uids to (name, etag)
         self._uid_to_name = {}
         # Maps names to (etag, uid)
@@ -49,6 +49,7 @@ class MemoryStore(Store):
         self._source_url = None
         self._comment = None
         self._color = None
+        self._type: str | None = None
 
     def _generate_etag(self) -> str:
         """Generate a unique etag."""
@@ -73,7 +74,7 @@ class MemoryStore(Store):
             yield (name, content_type, etag)
 
     def _check_duplicate(self, uid, name, replace_etag):
-        if uid is not None and self._check_for_duplicate_uids:
+        if uid is not None and self.require_unique_uids:
             try:
                 (existing_name, _) = self._uid_to_name[uid]
             except KeyError:
@@ -166,8 +167,15 @@ class MemoryStore(Store):
         return f"ctag-{len(self._items)}-{self._etag_counter}"
 
     def set_type(self, store_type: str) -> None:
-        """Set store type (no-op for memory store)."""
-        pass
+        """Set store type."""
+        if store_type not in VALID_STORE_TYPES:
+            raise ValueError(f"Invalid store type {store_type!r}")
+        self._type = store_type
+
+    def get_type(self) -> str:
+        if self._type is not None:
+            return self._type
+        return super().get_type()
 
     def set_description(self, description: str) -> None:
         """Set description (no-op for memory store)."""
