@@ -47,6 +47,32 @@ Basic Options
 
     Requires the ``cryptography`` Python package.
 
+``--state-dir DIR``
+    Directory for server state (TLS certificates from ``--autocert``,
+    VAPID keys for ``--webdav-push``, the push subscription index).
+    Distinct from ``--directory``, which stores user calendars and
+    address books.
+
+    Defaults to ``$XDG_DATA_HOME/xandikos`` (typically
+    ``~/.local/share/xandikos``).
+
+``--webdav-push``
+    Enable WebDAV-Push (`draft-bitfire-webdav-push
+    <https://github.com/bitfireAT/webdav-push/>`_). Clients - notably
+    DAVx5 - can register a Web Push (:RFC:`8030`) endpoint instead of
+    polling; Xandikos delivers VAPID-signed (:RFC:`8292`),
+    ``aes128gcm``-encrypted (:RFC:`8291`) notifications when a
+    calendar or addressbook changes.
+
+    A VAPID keypair is generated under ``<state-dir>/vapid/`` on first
+    start and persisted across restarts. Per-collection subscription
+    state lives next to the collection on disk and is excluded from
+    Git history.
+
+    Requires the optional ``webdav-push`` extra::
+
+        pip install 'xandikos[webdav-push]'
+
 ``--htpasswd FILE``
     Require HTTP Basic authentication, validating credentials against an
     Apache-style ``htpasswd`` file. The file is reloaded automatically when
@@ -162,6 +188,17 @@ When running in Docker, these environment variables are supported:
     Path inside the container to an Apache-style htpasswd file used to
     require HTTP Basic authentication (see ``--htpasswd`` above). Mount
     the file read-only at this path. Requires ``AUTOCERT=true``.
+
+``WEBDAV_PUSH``
+    Controls whether WebDAV-Push is enabled. Enabled by default in the
+    container image; set to ``false`` or ``0`` to disable. See
+    ``--webdav-push`` above.
+
+``STATE_DIR``
+    Directory for server state (VAPID keys, TLS certificates, push
+    subscription index). Defaults to ``/data/state`` inside the
+    container so it persists on the ``/data`` volume. See
+    ``--state-dir`` above.
 
 Configuration Examples
 ----------------------

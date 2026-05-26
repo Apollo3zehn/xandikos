@@ -475,6 +475,43 @@ Supported collations:
 - i;ascii-casemap (case-insensitive ASCII)
 - i;octet (exact octet-by-octet matching)
 
+draft-bitfire-webdav-push (WebDAV-Push)
+---------------------------------------
+
+Implemented. Enabled with ``--webdav-push``; off by default. When
+enabled, calendar and addressbook collections advertise the
+``{https://bitfire.at/webdav-push}push-transports`` /
+``push-topic`` / ``supported-triggers`` properties and accept a POST
+of a ``{https://bitfire.at/webdav-push}push-register`` body. Each
+successful registration returns a subscription URL of the form
+``${route-prefix}.subscriptions/<sub-id>``; ``DELETE`` against that
+URL cancels the subscription.
+
+Notifications are delivered as Web Push messages
+(`RFC 8030 <https://www.rfc-editor.org/rfc/rfc8030>`_) signed with
+VAPID (`RFC 8292 <https://www.rfc-editor.org/rfc/rfc8292>`_) and
+encrypted with ``aes128gcm``
+(`RFC 8291 <https://www.rfc-editor.org/rfc/rfc8291>`_). The VAPID
+keypair is generated under ``<state-dir>/vapid/`` on first start.
+
+Triggers
+^^^^^^^^
+
+The server fires a notification when a member resource is created,
+modified, or deleted in a subscribed collection, and when the
+collection's displayname changes. Server-side changes that originate
+from an authenticated client carrying the ``Push-Dont-Notify`` header
+(per the draft) suppress the notification for the matching
+subscription only.
+
+Not implemented
+^^^^^^^^^^^^^^^
+
+- A web-push delivery queue with retries — transient delivery
+  failures are logged; clients that miss a notification fall back to
+  their configured polling interval. Push endpoints that return
+  ``410 Gone`` or ``404`` drop the corresponding subscription.
+
 Other Notable Specifications
 ----------------------------
 

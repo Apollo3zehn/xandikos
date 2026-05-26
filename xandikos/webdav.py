@@ -33,9 +33,8 @@ from logging import getLogger
 import os
 import posixpath
 import urllib.parse
-from collections.abc import AsyncIterable, Iterable, Iterator, Sequence
+from collections.abc import AsyncIterable, Callable, Iterable, Iterator, Sequence
 from datetime import datetime
-from collections.abc import Callable
 from wsgiref.util import request_uri
 
 # Hmm, defusedxml doesn't have XML generation functions? :(
@@ -1127,9 +1126,9 @@ class Collection(Resource):
         """Handle a POST request targeted at this collection.
 
         The default implementation interprets the request as an
-        RFC 5995 add-member request. Subclasses may override this
-        to provide collection-specific POST semantics — for example
-        a CalDAV schedule-outbox processes free-busy lookups here
+        RFC 5995 add-member request. Subclasses override this to
+        provide collection-specific POST semantics — for example a
+        CalDAV schedule-outbox processes free-busy lookups here
         (RFC 6638 §6).
 
         Args:
@@ -2204,6 +2203,25 @@ class PostMethod(Method):
                 await app._get_allowed_methods(request, environ)
             )
         content_type, params = parse_type(request.content_type)
+        # XML POSTs are dispatched by root element tag (parallel to
+        # REPORT). Non-XML POSTs and unrecognised root elements fall
+        # through to the collection's ``handle_post`` (RFC 5995
+        # add-member, scheduling free-busy, ...).
+        if app.post_handlers and content_type in ("application/xml", "text/xml"):
+            joined = b"".join(new_contents)
+            try:
+                root = xmlparse(joined)
+            except (ET.ParseError, ValueError):
+                # ET.ParseError covers malformed XML; defusedxml's
+                # EntitiesForbidden/DTDForbidden/ExternalReferenceForbidden
+                # are ValueError subclasses.
+                root = None
+            if root is not None:
+                handler = app.post_handlers.get(root.tag)
+                if handler is not None:
+                    return await handler(request, environ, path, root, r)
+            # Re-thread the already-read body so handle_post still gets bytes.
+            new_contents = [joined]
         return await r.handle_post(request, environ, path, new_contents, content_type)
 
 
@@ -3174,7 +3192,13 @@ class WebDAVApp:
         self.properties: dict[str, type[Property]] = {}
         self.reporters: dict[str, type[Reporter]] = {}
         self.methods: dict[str, type[Method]] = {}
+        # Async handlers for XML POSTs, keyed by root element tag (e.g.
+        # ``"{https://bitfire.at/webdav-push}push-register"``). Mirrors
+        # the REPORT registry: the root element is the semantic
+        # discriminator, not the URL or method.
+        self.post_handlers: dict[str, Callable] = {}
         self.strict = strict
+        self.extra_features: list[str] = []
         self.register_methods(
             [
                 DeleteMethod(),
@@ -3211,9 +3235,21 @@ class WebDAVApp:
         for m in methods:
             self.methods[m.name] = m
 
+    def register_post_handlers(self, handlers):
+        """Register POST handlers keyed by root XML element tag.
+
+        ``handlers`` is an iterable of ``(tag, async_callable)`` pairs.
+        Each callable has signature
+        ``(request, environ, path, root_element, collection) -> Response``
+        and is invoked when a POST arrives with an XML body whose root
+        element matches ``tag``.
+        """
+        for tag, handler in handlers:
+            self.post_handlers[tag] = handler
+
     def _get_dav_features(self, resource):
         # TODO(jelmer): Support access-control
-        return [
+        features = [
             "1",
             "2",
             "3",
@@ -3225,6 +3261,8 @@ class WebDAVApp:
             "sync-collection",
             "quota",
         ]
+        features.extend(self.extra_features)
+        return features
 
     async def _get_allowed_methods(self, request, environ):
         """List of supported methods on this endpoint."""
@@ -3275,44 +3313,55 @@ class WebDAVApp:
         # Check authorization before processing the request
         self.check_access(environ, path_info, request.method)
 
+        # Capture Push-Dont-Notify so hooks fired during this request can
+        # suppress notifications for self-induced changes (WebDAV-Push).
+        from . import webdav_push
+
+        push_token = webdav_push.set_push_dont_notify(
+            request.headers.get(webdav_push.PUSH_DONT_NOTIFY_HEADER)
+        )
+
         try:
-            do = self.methods[request.method]
-        except KeyError:
-            return _send_method_not_allowed(
-                await self._get_allowed_methods(request, environ)
-            )
-        try:
-            return await do.handle(request, environ, self)
-        except BadRequestError as e:
-            logger.debug("Bad request: %s", e.message)
-            return Response(
-                status="400 Bad Request",
-                body=[e.message.encode(DEFAULT_ENCODING)],
-            )
-        except NotAcceptableError as e:
-            return Response(
-                status="406 Not Acceptable",
-                body=[str(e).encode(DEFAULT_ENCODING)],
-            )
-        except UnsupportedMediaType as e:
-            return Response(
-                status="415 Unsupported Media Type",
-                body=[
-                    f"Unsupported media type {e.content_type!r}".encode(
-                        DEFAULT_ENCODING
-                    )
-                ],
-            )
-        except UnauthorizedError:
-            return Response(
-                status="401 Unauthorized",
-                body=[("Please login.".encode(DEFAULT_ENCODING))],
-            )
-        except ForbiddenError as e:
-            return Response(
-                status="403 Forbidden",
-                body=[e.message.encode(DEFAULT_ENCODING)],
-            )
+            try:
+                do = self.methods[request.method]
+            except KeyError:
+                return _send_method_not_allowed(
+                    await self._get_allowed_methods(request, environ)
+                )
+            try:
+                return await do.handle(request, environ, self)
+            except BadRequestError as e:
+                logger.debug("Bad request: %s", e.message)
+                return Response(
+                    status="400 Bad Request",
+                    body=[e.message.encode(DEFAULT_ENCODING)],
+                )
+            except NotAcceptableError as e:
+                return Response(
+                    status="406 Not Acceptable",
+                    body=[str(e).encode(DEFAULT_ENCODING)],
+                )
+            except UnsupportedMediaType as e:
+                return Response(
+                    status="415 Unsupported Media Type",
+                    body=[
+                        f"Unsupported media type {e.content_type!r}".encode(
+                            DEFAULT_ENCODING
+                        )
+                    ],
+                )
+            except UnauthorizedError:
+                return Response(
+                    status="401 Unauthorized",
+                    body=[("Please login.".encode(DEFAULT_ENCODING))],
+                )
+            except ForbiddenError as e:
+                return Response(
+                    status="403 Forbidden",
+                    body=[e.message.encode(DEFAULT_ENCODING)],
+                )
+        finally:
+            webdav_push.reset_push_dont_notify(push_token)
 
     def handle_wsgi_request(self, environ, start_response):
         if "SCRIPT_NAME" not in environ:

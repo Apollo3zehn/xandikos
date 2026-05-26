@@ -46,6 +46,11 @@ for Android.
 8. Select which collections to sync
 9. Configure sync intervals as desired
 
+If the Xandikos instance is started with ``--webdav-push``, DAVx5 will
+register for Web Push notifications automatically and update affected
+collections as soon as the server reports a change, removing the need
+for short polling intervals. No client-side configuration is required.
+
 vdirsyncer
 ----------
 

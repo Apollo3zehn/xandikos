@@ -147,6 +147,8 @@ class MultiUserXandikosApp(XandikosApp):
         current_user_principal: str,
         strict: bool = True,
         require_auth: bool = True,
+        vapid_keystore=None,
+        state_dir: str | None = None,
     ) -> None:
         """Initialize the multi-user app.
 
@@ -156,8 +158,17 @@ class MultiUserXandikosApp(XandikosApp):
             strict: Whether to be strict about DAV compliance
             require_auth: If True, deny access to unauthenticated requests
                          (except for root and well-known paths for discovery)
+            vapid_keystore: Optional VAPID keystore enabling WebDAV-Push.
+            state_dir: Xandikos server state directory; required if
+                ``vapid_keystore`` is provided.
         """
-        super().__init__(backend, current_user_principal, strict=strict)
+        super().__init__(
+            backend,
+            current_user_principal,
+            strict=strict,
+            vapid_keystore=vapid_keystore,
+            state_dir=state_dir,
+        )
         self._backend = backend
         self._require_auth = require_auth
 
@@ -344,6 +355,29 @@ def add_parser(parser):
     )
     parser.add_argument("--debug", action="store_true", help="Print debug messages")
     parser.add_argument(
+        "--state-dir",
+        dest="state_dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Directory for Xandikos server state (TLS certificates, "
+            "VAPID keys, ...). Distinct from --directory, which stores "
+            "user calendars and address books. "
+            "Defaults to $XDG_DATA_HOME/xandikos."
+        ),
+    )
+    parser.add_argument(
+        "--webdav-push",
+        dest="webdav_push",
+        action="store_true",
+        help=(
+            "Enable WebDAV-Push (draft-bitfire-webdav-push). A VAPID "
+            "(RFC 8292) keypair is generated under <state-dir>/vapid/ "
+            "on first start. Requires the 'webdav-push' optional "
+            "dependencies."
+        ),
+    )
+    parser.add_argument(
         "--hide-principals",
         action="store_true",
         dest="hide_principals",
@@ -397,6 +431,19 @@ async def main(options, parser):
     version_str = ", ".join(f"{pkg} {ver}" for pkg, ver in _get_package_versions())
     logging.info("%s (multi-user mode)", version_str)
 
+    from . import webdav_push
+    from .web import default_state_dir
+
+    state_dir = options.state_dir or default_state_dir()
+
+    vapid_keystore = None
+    if options.webdav_push:
+        try:
+            vapid_keystore = webdav_push.VapidKeystore(os.path.join(state_dir, "vapid"))
+            _ = vapid_keystore.public_key_b64
+        except RuntimeError as exc:
+            parser.error(str(exc))
+
     main_app = MultiUserXandikosApp(
         backend,
         current_user_principal=(
@@ -405,6 +452,8 @@ async def main(options, parser):
             + options.principal_path_suffix
         ),
         strict=options.strict,
+        vapid_keystore=vapid_keystore,
+        state_dir=state_dir,
     )
 
     async def xandikos_handler(request):
@@ -466,8 +515,11 @@ async def main(options, parser):
             "*", path, RedirectDavHandler(options.route_prefix).__call__
         )
 
+    from .web import _maybe_mount_subscription_route
+
     if options.route_prefix.strip("/"):
         xandikos_app = web.Application()
+        _maybe_mount_subscription_route(xandikos_app, main_app)
         xandikos_app.router.add_route("*", "/{path_info:.*}", xandikos_handler)
 
         async def redirect_to_subprefix(request):
@@ -476,6 +528,7 @@ async def main(options, parser):
         app.router.add_route("*", "/", redirect_to_subprefix)
         app.add_subapp(options.route_prefix, xandikos_app)
     else:
+        _maybe_mount_subscription_route(app, main_app)
         app.router.add_route("*", "/{path_info:.*}", xandikos_handler)
 
     if options.avahi:

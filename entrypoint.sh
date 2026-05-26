@@ -109,6 +109,16 @@ if [ "$AUTOCERT" = "true" ] || [ "$AUTOCERT" = "1" ]; then
     ARGS+=("--autocert")
 fi
 
+if [ "$WEBDAV_PUSH" != "false" ] && [ "$WEBDAV_PUSH" != "0" ]; then
+    ARGS+=("--webdav-push")
+fi
+
+if [ -n "$STATE_DIR" ]; then
+    ARGS+=("--state-dir=$STATE_DIR")
+else
+    ARGS+=("--state-dir=/data/state")
+fi
+
 if [ -n "$HTPASSWD" ]; then
     ARGS+=("--htpasswd=$HTPASSWD")
 fi

@@ -24,12 +24,6 @@ import logging
 import os
 import ssl
 
-DEFAULT_CERT_DIR = os.path.join(
-    os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")),
-    "xandikos",
-    "certs",
-)
-
 CERT_FILENAME = "selfsigned.crt"
 KEY_FILENAME = "selfsigned.key"
 
@@ -113,17 +107,14 @@ def _needs_regeneration(cert_path: str) -> bool:
     return expiry < threshold
 
 
-def ensure_self_signed(
-    cert_dir: str | None = None, hostname: str = "localhost"
-) -> tuple[str, str]:
+def ensure_self_signed(cert_dir: str, hostname: str = "localhost") -> tuple[str, str]:
     """Ensure a self-signed certificate exists, generating one if needed.
 
     Returns:
         Tuple of (cert_path, key_path).
     """
-    directory = cert_dir or DEFAULT_CERT_DIR
-    cert_path = os.path.join(directory, CERT_FILENAME)
-    key_path = os.path.join(directory, KEY_FILENAME)
+    cert_path = os.path.join(cert_dir, CERT_FILENAME)
+    key_path = os.path.join(cert_dir, KEY_FILENAME)
 
     if _needs_regeneration(cert_path) or not os.path.exists(key_path):
         logger.info("Generating self-signed certificate at %s", cert_path)
