@@ -50,7 +50,7 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/ && \
     groupadd -g 1000 xandikos && \
-    useradd -d /code -c Xandikos -g xandikos -M -s /bin/bash -u 1000 xandikos && \
+    useradd -d /home/xandikos -c Xandikos -g xandikos -m -s /bin/bash -u 1000 xandikos && \
     # Install dulwich from pip instead of Debian package to get a newer version
     # that fixes _GitFile import issues in index.py (0.24.6 vs 0.24.2)
     pip3 install --break-system-packages dulwich
