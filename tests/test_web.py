@@ -524,6 +524,35 @@ END:VCALENDAR\r
         self.assertEqual([], list(merged.subcomponents))
 
 
+class ObjectResourceSetBodyTests(unittest.TestCase):
+    """Test ObjectResource.set_body error mapping."""
+
+    def _make_resource(self, store):
+        return ObjectResource(store, "foo.ics", "text/calendar", "etag")
+
+    def test_set_body_maps_out_of_space(self):
+        from xandikos.store import OutOfSpaceError
+
+        class _Store:
+            def import_one(self, *args, **kwargs):
+                raise OutOfSpaceError()
+
+        resource = self._make_resource(_Store())
+        with self.assertRaises(webdav.InsufficientStorage):
+            asyncio.run(resource.set_body([EXAMPLE_VCALENDAR1]))
+
+    def test_set_body_maps_locked(self):
+        from xandikos.store import LockedError
+
+        class _Store:
+            def import_one(self, *args, **kwargs):
+                raise LockedError("foo.ics")
+
+        resource = self._make_resource(_Store())
+        with self.assertRaises(webdav.ResourceLocked):
+            asyncio.run(resource.set_body([EXAMPLE_VCALENDAR1]))
+
+
 class CalendarCollectionMigrationTests(unittest.TestCase):
     """Test migration from .xandikos file to .xandikos/ directory structure."""
 

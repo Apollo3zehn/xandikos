@@ -253,6 +253,8 @@ class ObjectResource(webdav.Resource):
             raise webdav.PreconditionFailure(
                 "{%s}no-uid-conflict" % caldav.NAMESPACE, "UID already in use."
             ) from exc
+        except OutOfSpaceError as exc:
+            raise webdav.InsufficientStorage() from exc
         except LockedError as exc:
             raise webdav.ResourceLocked() from exc
         return create_strong_etag(etag)
