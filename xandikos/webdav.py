@@ -2254,13 +2254,13 @@ class PutMethod(Method):
         if r is not None:
             # Item already exists; update it
             container = app.backend.get_resource(container_path)
-            if isinstance(container, Collection):
-                rewritten = await container.pre_put_hook(
-                    name, new_contents, content_type
-                )
-                if rewritten is not None:
-                    new_contents = rewritten
             try:
+                if isinstance(container, Collection):
+                    rewritten = await container.pre_put_hook(
+                        name, new_contents, content_type
+                    )
+                    if rewritten is not None:
+                        new_contents = rewritten
                 new_etag = await r.set_body(
                     new_contents,
                     current_etag,
@@ -2295,11 +2295,11 @@ class PutMethod(Method):
             return _send_method_not_allowed(
                 await app._get_allowed_methods(request, environ)
             )
-        if isinstance(r, Collection):
-            rewritten = await r.pre_put_hook(name, new_contents, content_type)
-            if rewritten is not None:
-                new_contents = rewritten
         try:
+            if isinstance(r, Collection):
+                rewritten = await r.pre_put_hook(name, new_contents, content_type)
+                if rewritten is not None:
+                    new_contents = rewritten
             (new_name, new_etag) = await r.create_member(
                 name,
                 new_contents,
