@@ -1655,6 +1655,48 @@ class WebTests(WebTestCase):
         # Verify it's not a multi-status response
         self.assertNotEqual("207 Multi-Status", code)
 
+    def test_put_pre_put_hook_precondition_failure_on_create(self):
+        """PreconditionFailure raised in pre_put_hook returns 412 when creating."""
+
+        class TestCollection(Collection):
+            async def pre_put_hook(self, name, contents, content_type, etag=None):
+                raise webdav.PreconditionFailure(
+                    "{urn:ietf:params:xml:ns:caldav}attendee-allowed",
+                    "Attendees may only modify their own ATTENDEE entry.",
+                )
+
+        app = self.makeApp({"/collection": TestCollection()}, [])
+        code, headers = self.put(app, "/collection/test.ics", b"data")
+
+        self.assertEqual("412 Precondition Failed", code)
+
+    def test_put_pre_put_hook_precondition_failure_on_update(self):
+        """PreconditionFailure raised in pre_put_hook returns 412 when updating."""
+
+        class TestResource(Resource):
+            async def get_etag(self):
+                return '"existing-etag"'
+
+            async def set_body(
+                self, data, replace_etag=None, remote_user=None, requester=None
+            ):
+                return '"new-etag"'
+
+        class TestCollection(Collection):
+            async def pre_put_hook(self, name, contents, content_type, etag=None):
+                raise webdav.PreconditionFailure(
+                    "{urn:ietf:params:xml:ns:caldav}attendee-allowed",
+                    "Attendees may only modify their own ATTENDEE entry.",
+                )
+
+        app = self.makeApp(
+            {"/collection": TestCollection(), "/collection/test.ics": TestResource()},
+            [],
+        )
+        code, headers = self.put(app, "/collection/test.ics", b"data")
+
+        self.assertEqual("412 Precondition Failed", code)
+
     def test_propfind_prop_does_not_exist(self):
         app = self.makeApp({"/resource": Resource()}, [])
         code, headers, contents = self.propfind(
