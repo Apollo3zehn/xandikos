@@ -973,14 +973,14 @@ class ScheduleOutboxLookupTests(unittest.TestCase):
         super().setUp()
         self.tempdir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tempdir)
-        self.backend = SingleUserFilesystemBackend(self.tempdir)
+        # Set a known default email so the principal's
+        # calendar-user-address-set resolves to a predictable address.
+        self.backend = SingleUserFilesystemBackend(
+            self.tempdir, default_email="user@example.com"
+        )
         # Pass an absolute path so the principal is registered under the same
         # key the resource lookup uses.
         self.backend.create_principal("/user", create_defaults=True)
-        # Inject a known calendar-user-address-set on the principal so we
-        # don't depend on the EMAIL environment variable.
-        os.environ["EMAIL"] = "user@example.com"
-        self.addCleanup(os.environ.pop, "EMAIL", None)
 
     def _put_event(self, body):
         cal = self.backend.get_resource("/user/calendars/calendar")
@@ -2010,10 +2010,10 @@ class FreeBusyTranspAndDeclinedTests(unittest.TestCase):
         super().setUp()
         self.tempdir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tempdir)
-        self.backend = SingleUserFilesystemBackend(self.tempdir)
+        self.backend = SingleUserFilesystemBackend(
+            self.tempdir, default_email="user@example.com"
+        )
         self.backend.create_principal("/user", create_defaults=True)
-        os.environ["EMAIL"] = "user@example.com"
-        self.addCleanup(os.environ.pop, "EMAIL", None)
 
     def _put_event(self, body, calendar_path="/user/calendars/calendar", name="e.ics"):
         cal = self.backend.get_resource(calendar_path)
@@ -2142,20 +2142,20 @@ class PrincipalCalendarUserAddressSetTests(unittest.TestCase):
         super().setUp()
         self.tempdir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tempdir)
-        self.backend = SingleUserFilesystemBackend(self.tempdir)
+        self.backend = SingleUserFilesystemBackend(
+            self.tempdir, default_email="alice@env.example"
+        )
         self.backend.create_principal("/alice")
         self.principal = self.backend.get_principal("/alice")
 
-    def test_falls_back_to_email_env_when_no_config(self):
-        os.environ["EMAIL"] = "alice@env.example"
-        self.addCleanup(os.environ.pop, "EMAIL", None)
+    def test_falls_back_to_default_email_when_no_config(self):
         self.assertEqual(
             ["mailto:alice@env.example"],
             self.principal.get_calendar_user_address_set(),
         )
 
-    def test_returns_empty_when_no_config_and_no_env(self):
-        os.environ.pop("EMAIL", None)
+    def test_returns_empty_when_no_config_and_no_default_email(self):
+        self.backend.default_email = None
         self.assertEqual([], self.principal.get_calendar_user_address_set())
 
     def test_set_then_get_round_trips(self):
@@ -2167,18 +2167,14 @@ class PrincipalCalendarUserAddressSetTests(unittest.TestCase):
         self.principal.set_calendar_user_address_set(addresses)
         self.assertEqual(addresses, self.principal.get_calendar_user_address_set())
 
-    def test_set_overrides_env_var(self):
-        os.environ["EMAIL"] = "alice@env.example"
-        self.addCleanup(os.environ.pop, "EMAIL", None)
+    def test_set_overrides_default_email(self):
         self.principal.set_calendar_user_address_set(["mailto:new@example.com"])
         self.assertEqual(
             ["mailto:new@example.com"],
             self.principal.get_calendar_user_address_set(),
         )
 
-    def test_set_empty_restores_env_var_fallback(self):
-        os.environ["EMAIL"] = "alice@env.example"
-        self.addCleanup(os.environ.pop, "EMAIL", None)
+    def test_set_empty_restores_default_email_fallback(self):
         self.principal.set_calendar_user_address_set(["mailto:new@example.com"])
         self.principal.set_calendar_user_address_set([])
         self.assertEqual(
