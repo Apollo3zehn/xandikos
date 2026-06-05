@@ -180,8 +180,8 @@ class CalendarUserAddressSetPropertyTests(unittest.TestCase):
 
             hrefs = el.findall("{DAV:}href")
             self.assertEqual(len(hrefs), 1)
-            # mailto URIs are URL-encoded by create_href
-            self.assertEqual(hrefs[0].text, "mailto%3Auser1%40example.com")
+            # mailto URIs are emitted verbatim, not path-quoted
+            self.assertEqual(hrefs[0].text, "mailto:user1@example.com")
 
         asyncio.run(run_test())
 
@@ -210,9 +210,9 @@ class CalendarUserAddressSetPropertyTests(unittest.TestCase):
 
             hrefs = el.findall("{DAV:}href")
             self.assertEqual(len(hrefs), 3)
-            # Check exact values in order - mailto URIs are URL-encoded by create_href
-            self.assertEqual(hrefs[0].text, "mailto%3Auser1%40example.com")
-            self.assertEqual(hrefs[1].text, "mailto%3Auser1%40otherdomain.com")
+            # mailto URIs are emitted verbatim; path addresses are path-quoted
+            self.assertEqual(hrefs[0].text, "mailto:user1@example.com")
+            self.assertEqual(hrefs[1].text, "mailto:user1@otherdomain.com")
             self.assertEqual(hrefs[2].text, "/principals/user1/")
 
         asyncio.run(run_test())
