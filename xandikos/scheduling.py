@@ -24,6 +24,7 @@ See https://tools.ietf.org/html/rfc6638
 
 import datetime
 import posixpath
+import urllib.parse
 from collections.abc import Iterable
 from xml.etree import ElementTree as ET
 
@@ -361,8 +362,14 @@ class CalendarUserAddressSetProperty(webdav.Property):
     in_allprops = False
 
     async def get_value(self, base_href, resource, el, environ):
-        for href in resource.get_calendar_user_address_set():
-            el.append(webdav.create_href(href, base_href))
+        for address in resource.get_calendar_user_address_set():
+            if urllib.parse.urlparse(address).scheme:
+                # URI addresses (e.g. mailto:) are already in canonical form
+                # and must not be path-quoted.
+                href_el = ET.SubElement(el, "{DAV:}href")
+                href_el.text = address
+            else:
+                el.append(webdav.create_href(address, base_href))
 
     async def set_value(self, href, resource, el):
         if el is None:
