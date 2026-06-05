@@ -92,6 +92,15 @@ class MultiUserFilesystemBackendTests(unittest.TestCase):
         )
         self.assertFalse(backend.show_principals_on_root)
 
+    def test_no_default_email(self):
+        """Multi-user backends never share a default calendar-user-address."""
+        backend = MultiUserFilesystemBackend(self.test_dir)
+        self.assertIsNone(backend.default_email)
+        backend.set_principal("alice")
+        principal = backend.get_principal("/alice/")
+        assert principal is not None
+        self.assertEqual([], principal.get_calendar_user_address_set())
+
     def test_set_principal_creates_principal(self):
         """Test that set_principal creates a new principal."""
         backend = MultiUserFilesystemBackend(self.test_dir)

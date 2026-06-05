@@ -2071,23 +2071,22 @@ class Principal(webdav.Principal):
         """Return this principal's calendar user addresses.
 
         Delegates the storage to :class:`FileBasedCollectionMetadata`
-        backed by the principal's ``.xandikos`` config file. Falls
-        back to a single ``mailto:`` derived from the ``EMAIL``
-        environment variable when no addresses are configured. The
-        config is written through PROPPATCH on the
-        ``calendar-user-address-set`` property.
+        backed by the principal's ``.xandikos`` config file. When no
+        addresses are configured, falls back to a single ``mailto:``
+        derived from the backend's default email. This default is only
+        set in single-user mode, so multi-user deployments never share
+        one address across principals. The config is written through
+        PROPPATCH on the ``calendar-user-address-set`` property.
         """
         try:
             return self._metadata().get_calendar_user_address_set()
         except KeyError:
             pass
         ret = []
-        try:
-            (fullname, email) = parseaddr(os.environ["EMAIL"])
-        except KeyError:
-            pass
-        else:
-            ret.append("mailto:" + email)
+        if self.backend.default_email:
+            (fullname, email) = parseaddr(self.backend.default_email)
+            if email:
+                ret.append("mailto:" + email)
         return ret
 
     def set_calendar_user_address_set(self, addresses: list[str]) -> None:
@@ -2274,9 +2273,11 @@ class SingleUserFilesystemBackend(FilesystemBackend):
         show_principals_on_root: bool = True,
         imip_transport: imip_transport_mod.IMIPTransport | None = None,
         imip_from: str | None = None,
+        default_email: str | None = None,
     ) -> None:
         super().__init__(path)
         self._user_principals: set[str] = set()
+        self.default_email = default_email
         self.paranoid = paranoid
         self.index_threshold = index_threshold
         self.eager_indexing = eager_indexing
@@ -2654,7 +2655,9 @@ def run_simple_server(
       port: TCP Port to listen on (None to disable)
       socket_path: Unix domain socket path to listen on (None to disable)
     """
-    backend = SingleUserFilesystemBackend(directory)
+    backend = SingleUserFilesystemBackend(
+        directory, default_email=os.environ.get("EMAIL")
+    )
     backend._mark_as_principal(current_user_principal)
 
     if autocreate or defaults:
@@ -2943,6 +2946,7 @@ async def main(options, parser):
         eager_indexing=options.eager,
         imip_transport=imip_transport_mod.from_args(options),
         imip_from=options.smtp_from,
+        default_email=os.environ.get("EMAIL"),
     )
     backend._mark_as_principal(options.current_user_principal)
 
