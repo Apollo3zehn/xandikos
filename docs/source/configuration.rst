@@ -314,6 +314,37 @@ directory before the home directories are created:
 Both keys accept a comma-separated list to advertise multiple homes.
 When unset, the defaults ``calendars`` and ``contacts`` apply.
 
+Scheduling Identity (calendar-user-address-set)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``calendar-user-address-set`` (:RFC:`6638`, section 2.4.1) lists the
+addresses by which a principal is known as a calendar user. Clients use
+it to recognise which invitations belong to you and to fill in the
+organiser and attendee fields, and Xandikos uses it to route incoming
+iTIP/iMIP messages to the right principal.
+
+Set it in the ``[scheduling]`` section of the principal's ``.xandikos``
+file. ``addresses`` is a comma-separated list, conventionally
+``mailto:`` URIs:
+
+.. code-block:: ini
+
+   [scheduling]
+   addresses = mailto:alice@example.com, mailto:alice@work.example.org
+
+The same section also holds the related ``user-type`` (one of
+``INDIVIDUAL``, ``GROUP``, ``RESOURCE``, ``ROOM`` or ``UNKNOWN``) and
+``default-calendar-url`` (the calendar that receives incoming iTIP
+messages).
+
+When no ``addresses`` key is set and Xandikos is running in single user mode,
+it falls back to a single address derived from the ``EMAIL`` environment
+variable of the server process.
+
+The property can also be read and written over the wire with a WebDAV
+PROPPATCH against the principal URL, so clients that support it can
+manage the set without editing the file directly.
+
 Directory Structure
 -------------------
 
