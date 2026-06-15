@@ -22,7 +22,6 @@ import unittest
 
 from xandikos.carddav import NAMESPACE, AddressDataProperty
 from xandikos.vcard import VCardFile, CardDAVFilter, parse_filter
-from xandikos import webdav
 from xandikos.webdav import ET
 from .test_vcard import EXAMPLE_VCARD1
 
@@ -135,11 +134,13 @@ class AddressbookMultigetReporterTests(unittest.TestCase):
         reporter = AddressbookMultiGetReporter()
         self.assertEqual(reporter.resource_type, ADDRESSBOOK_RESOURCE_TYPE)
 
-    def test_depth_validation_strict_mode(self):
-        """Test that Depth: 0 is enforced in strict mode.
+    def test_depth_header_ignored(self):
+        """Test that the Depth header is ignored, even in strict mode.
 
-        RFC 6352 Section 8.7 requires Depth: 0 for addressbook-multiget.
-        In strict mode, non-zero depth values should be rejected.
+        RFC 6352 Section 8.7 says addressbook-multiget "MUST include a
+        Depth: 0 header", but the examples in that section use Depth: 1 and
+        errata EID 4610 recommends Depth: 1. Depth is meaningless for a
+        multiget, so non-zero values are accepted.
         """
         from xandikos.carddav import AddressbookMultiGetReporter
 
@@ -147,33 +148,17 @@ class AddressbookMultigetReporterTests(unittest.TestCase):
             reporter = AddressbookMultiGetReporter()
             body = ET.Element("body")
 
-            # Test with depth "1" in strict mode - should raise error
-            with self.assertRaises(webdav.BadRequestError) as cm:
-                await reporter.report(
+            for depth in ("0", "1", "infinity"):
+                response = await reporter.report(
                     environ={},
                     body=body,
                     resources_by_hrefs=lambda hrefs: [],
                     properties={},
                     base_href="/",
                     resource=None,
-                    depth="1",
+                    depth=depth,
                     strict=True,
                 )
-            self.assertIn("Depth: 0", str(cm.exception))
-            self.assertIn("RFC 6352", str(cm.exception))
-
-            # Test with depth "infinity" in strict mode - should raise error
-            with self.assertRaises(webdav.BadRequestError) as cm:
-                await reporter.report(
-                    environ={},
-                    body=body,
-                    resources_by_hrefs=lambda hrefs: [],
-                    properties={},
-                    base_href="/",
-                    resource=None,
-                    depth="infinity",
-                    strict=True,
-                )
-            self.assertIn("Depth: 0", str(cm.exception))
+                self.assertEqual(response.status, 207)
 
         asyncio.run(run_test())
