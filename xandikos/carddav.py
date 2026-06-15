@@ -96,46 +96,18 @@ class AddressbookDescriptionProperty(webdav.Property):
 
 
 class AddressbookMultiGetReporter(davcommon.MultiGetReporter):
+    # RFC 6352 Section 8.7 (CardDAV addressbook-multiget) says the request
+    # "MUST include a Depth: 0 header", but both examples in that same section
+    # show Depth: 1, and errata EID 4610 (https://www.rfc-editor.org/errata/eid4610)
+    # recommends Depth: 1 instead. Depth is meaningless for a multiget anyway,
+    # since the request body enumerates the exact hrefs to return.
+    #
+    # We therefore ignore the Depth header here, matching how
+    # CalendarMultiGetReporter handles calendar-multiget, and accept clients
+    # such as pimsync that send Depth: 1.
     name = "{%s}addressbook-multiget" % NAMESPACE
     resource_type = ADDRESSBOOK_RESOURCE_TYPE
     data_property = AddressDataProperty()
-
-    async def report(
-        self,
-        environ,
-        body,
-        resources_by_hrefs,
-        properties,
-        base_href,
-        resource,
-        depth,
-        strict,
-    ):
-        # RFC 6352 Section 8.7 (CardDAV addressbook-multiget) specifies:
-        #   "The request MUST include a Depth: 0 header on the request."
-        #
-        # This is a client requirement, and the RFC doesn't explicitly mandate
-        # that servers MUST reject requests with other Depth values. However,
-        # in strict mode, we enforce this requirement to ensure full RFC
-        # compliance and catch misbehaving clients.
-        #
-        # In non-strict mode, we accept any Depth value for compatibility with
-        # existing clients that may send non-zero Depth headers.
-        if strict and depth != "0":
-            raise webdav.BadRequestError(
-                f"{self.name} requires Depth: 0 (RFC 6352 Section 8.7), "
-                f"got Depth: {depth}"
-            )
-        return await super().report(
-            environ,
-            body,
-            resources_by_hrefs,
-            properties,
-            base_href,
-            resource,
-            depth,
-            strict,
-        )
 
 
 class Addressbook(webdav.Collection):
