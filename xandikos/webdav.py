@@ -732,6 +732,65 @@ class Property:
         raise NotImplementedError(self.set_value)
 
 
+class HrefProperty(Property):
+    """Base for properties whose value is a single ``{DAV:}href``.
+
+    Handles the ``SCRIPT_NAME`` mount prefix on both read and write:
+    stored URLs are backend-internal paths (no mount prefix), but
+    clients see and supply paths that include it. Subclasses override
+    ``get_url`` / ``set_url`` to plug in the underlying storage.
+
+    On PROPPATCH, an href that does not start with ``SCRIPT_NAME`` is
+    rejected with the property's ``invalid_href_precondition``.
+    """
+
+    # XML name of the precondition raised when a client supplies an
+    # href whose path does not begin with SCRIPT_NAME. Subclasses
+    # should override this with their property-specific precondition.
+    invalid_href_precondition: str = "{DAV:}valid-href"
+
+    def get_url(self, resource: "Resource") -> str | None:
+        """Return the stored URL (a server-absolute path) or None."""
+        raise NotImplementedError(self.get_url)
+
+    def set_url(self, resource: "Resource", url: str | None) -> None:
+        """Persist a new URL (a server-absolute path) or None to unset."""
+        raise NotImplementedError(self.set_url)
+
+    async def get_value(self, href, resource, el, environ):
+        url = self.get_url(resource)
+        if url is None:
+            return
+        script_name = environ.get("SCRIPT_NAME", "")
+        if script_name and url.startswith("/"):
+            url = script_name.rstrip("/") + url
+        el.append(create_href(url, href))
+
+    async def set_value_ext(self, href, resource, el, environ):
+        if el is None:
+            self.set_url(resource, None)
+            return
+        href_el = el.find("{DAV:}href")
+        if href_el is None or not href_el.text or not href_el.text.strip():
+            self.set_url(resource, None)
+            return
+        raw = read_href_element(href_el)
+        if raw is None:
+            self.set_url(resource, None)
+            return
+        script_name = environ.get("SCRIPT_NAME", "").rstrip("/")
+        if script_name:
+            if not (raw == script_name or raw.startswith(script_name + "/")):
+                raise PreconditionFailure(
+                    self.invalid_href_precondition,
+                    f"href {raw!r} does not start with SCRIPT_NAME {script_name!r}",
+                )
+            stored = raw[len(script_name) :] or "/"
+        else:
+            stored = raw
+        self.set_url(resource, stored)
+
+
 class ResourceTypeProperty(Property):
     """Provides {DAV:}resourcetype."""
 
@@ -2046,7 +2105,7 @@ def _send_method_not_allowed(allowed_methods):
     )
 
 
-async def apply_modify_prop(el, href, resource, properties):
+async def apply_modify_prop(el, href, resource, properties, environ=None):
     """Apply property set/remove operations.
 
     Returns:
@@ -2054,6 +2113,7 @@ async def apply_modify_prop(el, href, resource, properties):
       href: Resource href
       resource: Resource to apply property modifications on
       properties: Known properties
+      environ: WSGI environ dict (for properties whose setter needs it)
     Returns: PropStatus objects
     """
     if el.tag not in ("{DAV:}set", "{DAV:}remove"):
@@ -2091,7 +2151,12 @@ async def apply_modify_prop(el, href, resource, properties):
                 statuscode = "403 Forbidden"
             else:
                 try:
-                    await handler.set_value(href, resource, newval)
+                    if hasattr(handler, "set_value_ext"):
+                        await handler.set_value_ext(
+                            href, resource, newval, environ or {}
+                        )
+                    else:
+                        await handler.set_value(href, resource, newval)
                 except ProtectedPropertyError:
                     # Protected property - cannot be modified
                     # RFC 4918: {DAV:}cannot-modify-protected-property
@@ -2871,8 +2936,19 @@ class PropfindMethod(Method):
 
 
 class ProppatchMethod(Method):
-    @multistatus
     async def handle(self, request, environ, app):
+        try:
+            return await self._handle(request, environ, app)
+        except PreconditionFailure as e:
+            return _send_simple_dav_error(
+                request,
+                "412 Precondition Failed",
+                error=ET.Element(e.precondition),
+                description=e.description,
+            )
+
+    @multistatus
+    async def _handle(self, request, environ, app):
         href, unused_path, resource = app._get_resource_from_environ(request, environ)
         if resource is None:
             yield Status(request.url, "404 Not Found")
@@ -2889,7 +2965,7 @@ class ProppatchMethod(Method):
                 [
                     ps
                     async for ps in apply_modify_prop(
-                        el, href, resource, app.properties
+                        el, href, resource, app.properties, environ
                     )
                 ]
             )
@@ -2929,7 +3005,7 @@ class MkcolMethod(Method):
                     [
                         ps
                         async for ps in apply_modify_prop(
-                            el, href, resource, app.properties
+                            el, href, resource, app.properties, environ
                         )
                     ]
                 )

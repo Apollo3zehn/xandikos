@@ -599,6 +599,33 @@ class ScheduleDefaultCalendarURLPropertyTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_get_value_prepends_script_name(self):
+        """Prepend SCRIPT_NAME to stored absolute backend paths.
+
+        Clients should receive a server-relative URL that includes the
+        mount prefix (e.g. ``/dav/``).
+        """
+
+        async def run_test():
+            prop = scheduling.ScheduleDefaultCalendarURLProperty()
+
+            class MockResource:
+                def get_schedule_default_calendar_url(self):
+                    return "/user/calendars/default/"
+
+            resource = MockResource()
+            el = ET.Element("test")
+
+            await prop.get_value(
+                "/dav/user/inbox/", resource, el, {"SCRIPT_NAME": "/dav"}
+            )
+
+            hrefs = el.findall("{DAV:}href")
+            self.assertEqual(len(hrefs), 1)
+            self.assertEqual(hrefs[0].text, "/dav/user/calendars/default/")
+
+        asyncio.run(run_test())
+
     def test_get_value_without_default(self):
         """Test schedule-default-calendar-URL with no default calendar.
 
@@ -623,8 +650,28 @@ class ScheduleDefaultCalendarURLPropertyTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
-    def test_set_value_passes_href(self):
-        """PROPPATCH passes a D:href child whose text is the new URL."""
+    def test_set_value_strips_script_name(self):
+        """PROPPATCH href has SCRIPT_NAME stripped before storage."""
+
+        async def run_test():
+            prop = scheduling.ScheduleDefaultCalendarURLProperty()
+            captured: list[str | None] = []
+
+            class MockResource:
+                def set_schedule_default_calendar_url(self, url):
+                    captured.append(url)
+
+            el = ET.Element(prop.name)
+            ET.SubElement(el, "{DAV:}href").text = "/dav/alice/calendars/work"
+            await prop.set_value_ext(
+                "/dav/alice/inbox/", MockResource(), el, {"SCRIPT_NAME": "/dav"}
+            )
+            self.assertEqual(["/alice/calendars/work"], captured)
+
+        asyncio.run(run_test())
+
+    def test_set_value_passes_href_no_script_name(self):
+        """Without SCRIPT_NAME, the href is stored verbatim."""
 
         async def run_test():
             prop = scheduling.ScheduleDefaultCalendarURLProperty()
@@ -636,8 +683,31 @@ class ScheduleDefaultCalendarURLPropertyTests(unittest.TestCase):
 
             el = ET.Element(prop.name)
             ET.SubElement(el, "{DAV:}href").text = "/alice/calendars/work"
-            await prop.set_value("/alice/inbox/", MockResource(), el)
+            await prop.set_value_ext("/alice/inbox/", MockResource(), el, {})
             self.assertEqual(["/alice/calendars/work"], captured)
+
+        asyncio.run(run_test())
+
+    def test_set_value_missing_script_name_prefix_fails(self):
+        """An href that doesn't start with SCRIPT_NAME is rejected with 412."""
+
+        async def run_test():
+            prop = scheduling.ScheduleDefaultCalendarURLProperty()
+
+            class MockResource:
+                def set_schedule_default_calendar_url(self, url):
+                    raise AssertionError("set_url should not be called")
+
+            el = ET.Element(prop.name)
+            ET.SubElement(el, "{DAV:}href").text = "/alice/calendars/work"
+            with self.assertRaises(webdav.PreconditionFailure) as cm:
+                await prop.set_value_ext(
+                    "/dav/alice/inbox/", MockResource(), el, {"SCRIPT_NAME": "/dav"}
+                )
+            self.assertEqual(
+                cm.exception.precondition,
+                "{urn:ietf:params:xml:ns:caldav}valid-schedule-default-calendar-URL",
+            )
 
         asyncio.run(run_test())
 
@@ -650,7 +720,7 @@ class ScheduleDefaultCalendarURLPropertyTests(unittest.TestCase):
                 def set_schedule_default_calendar_url(self, url):
                     captured.append(url)
 
-            await prop.set_value("/alice/inbox/", MockResource(), None)
+            await prop.set_value_ext("/alice/inbox/", MockResource(), None, {})
             self.assertEqual([None], captured)
 
         asyncio.run(run_test())
@@ -668,7 +738,7 @@ class ScheduleDefaultCalendarURLPropertyTests(unittest.TestCase):
 
             el = ET.Element(prop.name)
             ET.SubElement(el, "{DAV:}href").text = "  "
-            await prop.set_value("/alice/inbox/", MockResource(), el)
+            await prop.set_value_ext("/alice/inbox/", MockResource(), el, {})
             self.assertEqual([None], captured)
 
         asyncio.run(run_test())

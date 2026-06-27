@@ -428,7 +428,7 @@ class CalendarUserTypeProperty(webdav.Property):
             ) from exc
 
 
-class ScheduleDefaultCalendarURLProperty(webdav.Property):
+class ScheduleDefaultCalendarURLProperty(webdav.HrefProperty):
     """schedule-default-calendar-URL property.
 
     See https://tools.ietf.org/html/rfc6638, section-9.2
@@ -437,18 +437,12 @@ class ScheduleDefaultCalendarURLProperty(webdav.Property):
     name = "{%s}schedule-default-calendar-URL" % caldav.NAMESPACE
     resource_type = SCHEDULE_INBOX_RESOURCE_TYPE
     in_allprops = True
+    invalid_href_precondition = (
+        "{%s}valid-schedule-default-calendar-URL" % caldav.NAMESPACE
+    )
 
-    async def get_value(self, href, resource, el, environ):
-        url = resource.get_schedule_default_calendar_url()
-        if url is not None:
-            el.append(webdav.create_href(url, href))
+    def get_url(self, resource):
+        return resource.get_schedule_default_calendar_url()
 
-    async def set_value(self, href, resource, el):
-        if el is None:
-            resource.set_schedule_default_calendar_url(None)
-            return
-        href_el = el.find("{DAV:}href")
-        if href_el is None or not href_el.text or not href_el.text.strip():
-            resource.set_schedule_default_calendar_url(None)
-            return
-        resource.set_schedule_default_calendar_url(href_el.text.strip())
+    def set_url(self, resource, url):
+        resource.set_schedule_default_calendar_url(url)
