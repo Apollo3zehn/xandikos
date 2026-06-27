@@ -21,9 +21,9 @@
 
 from logging import getLogger
 from collections.abc import Iterable
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from collections.abc import Callable
-from typing import Any, Protocol, overload
+from typing import Any, Protocol, cast, overload
 from zoneinfo import ZoneInfo
 
 import dateutil.rrule
@@ -129,7 +129,7 @@ def validate_component(comp, strict=False):
         if isinstance(value, vText):
             for c in _INVALID_CONTROL_CHARACTERS:
                 if c in value:
-                    yield "Invalid character {} in field {}".format(
+                    yield "Invalid character {!r} in field {}".format(
                         c.encode("unicode_escape"),
                         name,
                     )
@@ -1578,7 +1578,7 @@ class ICalendarFile(File):
 
     def __init__(self, content, content_type) -> None:
         super().__init__(content, content_type)
-        self._calendar = None
+        self._calendar: Calendar | None = None
 
     def validate(self) -> None:
         """Verify that file contents are valid."""
@@ -1605,7 +1605,10 @@ class ICalendarFile(File):
     def calendar(self):
         if self._calendar is None:
             try:
-                self._calendar = Calendar.from_ical(b"".join(self.content))
+                self._calendar = cast(
+                    Calendar,
+                    Calendar.from_ical(b"".join(self.content).decode("utf-8")),
+                )
             except ValueError as exc:
                 raise InvalidFileContents(
                     self.content_type, self.content, str(exc)
@@ -1649,7 +1652,7 @@ class ICalendarFile(File):
         except NotImplementedError:
             lines = []
         if not lines:
-            lines = super().describe_delta(name, previous)
+            lines = list(super().describe_delta(name, previous))
         return lines
 
     def describe(self, name):
@@ -1730,7 +1733,7 @@ class ICalendarFile(File):
                 raise AssertionError(f"segments: {segments!r}")
 
 
-def as_tz_aware_ts(dt: datetime | date, default_timezone: str | timezone) -> datetime:
+def as_tz_aware_ts(dt: datetime | date, default_timezone: str | tzinfo) -> datetime:
     if not getattr(dt, "time", None):
         _dt = datetime.combine(dt, time())
     else:

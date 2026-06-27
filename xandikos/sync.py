@@ -124,7 +124,7 @@ class SyncCollectionReporter(webdav.Reporter):
                     yield webdav.Status(subhref, status="404 Not Found")
                 else:
                     propstat = []
-                    for prop in requested:
+                    for prop in requested or []:
                         if old_resource is not None:
                             old_propstat = await webdav.get_property_from_element(
                                 href, old_resource, properties, environ, prop

@@ -321,7 +321,7 @@ def parse_prop_filter(prop_el, filter_obj):
     """Parse a prop-filter element and add it to the filter."""
     name = prop_el.get("name")
     text_match = None
-    param_filters = []
+    param_filters: list = []
     is_not_defined = False
 
     for subel in prop_el:

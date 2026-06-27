@@ -62,10 +62,10 @@ class VdirStore(Store):
     ) -> None:
         super().__init__(MemoryIndex())
         self.path = path
-        # Set of blob ids that have already been scanned
-        self._fname_to_uid: dict[str, str] = {}
-        # Maps uids to (sha, fname)
-        self._uid_to_fname: dict[str, str] = {}
+        # Maps fname to (etag, uid)
+        self._fname_to_uid: dict[str, tuple[str, str | None]] = {}
+        # Maps uids to (fname, etag)
+        self._uid_to_fname: dict[str, tuple[str, str]] = {}
 
         # Cache etags by (name, mtime_ns, size) to avoid re-hashing unchanged files
         self._etag_cache: dict[str, tuple[int, int, str]] = {}

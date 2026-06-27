@@ -163,7 +163,7 @@ def pick_content_types(accepted_content_types, available_content_types):
       NotAcceptableError: If there are no overlapping content types
     """
     available_content_types = set(available_content_types)
-    acceptable_by_q = {}
+    acceptable_by_q: dict[float, list[str]] = {}
     for ct, params in accepted_content_types:
         acceptable_by_q.setdefault(float(params.get("q", "1")), []).append(ct)
     if 0 in acceptable_by_q:
@@ -302,7 +302,7 @@ def propstat_by_status(propstat):
       propstat: List of PropStatus objects:
     Returns: dictionary mapping HTTP status code to list of PropStatus objects
     """
-    bystatus = {}
+    bystatus: dict[tuple[str, str | None], list] = {}
     for propstat in propstat:
         (
             bystatus.setdefault(
@@ -593,6 +593,7 @@ class Resource:
         self,
         body: Iterable[bytes],
         replace_etag: str | None = None,
+        remote_user: str | None = None,
         requester: str | None = None,
     ) -> str:
         """Set resource contents.
@@ -600,6 +601,7 @@ class Resource:
         Args:
           body: Iterable over bytestrings
           replace_etag: Optional etag of object to replace
+          remote_user: Optional remote user
           requester: Optional User-Agent or client information
         Returns: New ETag
         """
@@ -2912,7 +2914,7 @@ class PropfindMethod(Method):
         async for href, resource in traverse_resource(
             base_resource, base_href, depth, check_access=check_resource_access
         ):
-            propstat = []
+            propstat: AsyncIterable[PropStatus]
             if requested is None or requested.tag == "{DAV:}allprop":
                 propstat = get_all_properties(href, resource, app.properties, environ)
             elif requested.tag == "{DAV:}prop":
@@ -3267,7 +3269,7 @@ class WebDAVApp:
         self.backend = backend
         self.properties: dict[str, type[Property]] = {}
         self.reporters: dict[str, type[Reporter]] = {}
-        self.methods: dict[str, type[Method]] = {}
+        self.methods: dict[str, Method] = {}
         # Async handlers for XML POSTs, keyed by root element tag (e.g.
         # ``"{https://bitfire.at/webdav-push}push-register"``). Mirrors
         # the REPORT registry: the root element is the semantic

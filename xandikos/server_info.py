@@ -38,7 +38,7 @@ class ServerInfo:
     """Server info."""
 
     def __init__(self) -> None:
-        self._token = None
+        self._token: str | None = None
         self._features: list[str] = []
         self._applications: list[str] = []
 
@@ -64,8 +64,8 @@ class ServerInfo:
         ET.SubElement(server_el, "version").text = version_string
         features_el = ET.SubElement(el, "features")
         for feature in self._features:
-            features_el.append(feature)
+            ET.SubElement(features_el, "feature").text = feature
         applications_el = ET.SubElement(el, "applications")
-        for application in self.applications:
-            applications_el.append(application)
+        for application in self._applications:
+            ET.SubElement(applications_el, "application").text = application
         return el

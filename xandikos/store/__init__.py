@@ -241,7 +241,7 @@ class NoSuchItem(Exception):
 class InvalidETag(Exception):
     """Unexpected value for etag."""
 
-    def __init__(self, name: str, expected_etag: str, got_etag: str) -> None:
+    def __init__(self, name: str, expected_etag: str | None, got_etag: str) -> None:
         self.name = name
         self.expected_etag = expected_etag
         self.got_etag = got_etag
