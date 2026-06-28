@@ -33,7 +33,7 @@ from icalendar.cal import Calendar, Component, FreeBusy
 from icalendar.prop import vDDDTypes, vPeriod
 
 from xandikos.caldav import PRODID
-from xandikos.icalendar import PropTypes
+from xandikos.icalendar import PropTypes, TimeProperty
 
 
 # RFC 5546 §3.6 / RFC 6638 §6.2 request-status codes used in iTIP REPLY
@@ -151,10 +151,16 @@ def extract_scheduling_signature(
             uid = component["UID"].to_ical()
         except KeyError:
             uid = b""
+        else:
+            if isinstance(uid, str):
+                uid = uid.encode("utf-8")
         try:
             recurrence_id = component["RECURRENCE-ID"].to_ical()
         except KeyError:
             recurrence_id = b""
+        else:
+            if isinstance(recurrence_id, str):
+                recurrence_id = recurrence_id.encode("utf-8")
         props: list[tuple[bytes, list[bytes]]] = []
         for field in component:
             if field.upper() not in SCHEDULING_PROPERTIES:
@@ -344,11 +350,17 @@ def parse_freebusy_window(
     fb: Component,
 ) -> tuple[datetime.datetime, datetime.datetime]:
     """Return (start, end) for a VFREEBUSY component as UTC datetimes."""
-    start = fb["DTSTART"].dt
-    end = fb["DTEND"].dt
-    if isinstance(start, datetime.date) and not isinstance(start, datetime.datetime):
+    start_prop = fb["DTSTART"]
+    end_prop = fb["DTEND"]
+    assert isinstance(start_prop, TimeProperty)
+    assert isinstance(end_prop, TimeProperty)
+    start = start_prop.dt
+    end = end_prop.dt
+    assert isinstance(start, datetime.date | datetime.datetime)
+    assert isinstance(end, datetime.date | datetime.datetime)
+    if not isinstance(start, datetime.datetime):
         start = datetime.datetime.combine(start, datetime.time(), datetime.timezone.utc)
-    if isinstance(end, datetime.date) and not isinstance(end, datetime.datetime):
+    if not isinstance(end, datetime.datetime):
         end = datetime.datetime.combine(end, datetime.time(), datetime.timezone.utc)
     if start.tzinfo is None:
         start = start.replace(tzinfo=datetime.timezone.utc)
