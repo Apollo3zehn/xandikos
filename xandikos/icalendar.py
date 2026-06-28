@@ -21,9 +21,9 @@
 
 from logging import getLogger
 from collections.abc import Iterable
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from collections.abc import Callable
-from typing import Any, Protocol, overload
+from typing import Any, Protocol, cast, overload, runtime_checkable
 from zoneinfo import ZoneInfo
 
 import dateutil.rrule
@@ -56,6 +56,36 @@ class PropTypes(Protocol):
     params: Parameters
 
     def to_ical(self) -> bytes: ...
+
+
+# icalendar's TimeBase (shared by vDate, vDatetime, vDuration, vPeriod, vTime,
+# vDDDTypes) uses self.dt internally but doesn't declare the attribute, so
+# isinstance(x, vDDDTypes) misses the other subclasses and TimeBase doesn't
+# satisfy mypy. Use a Protocol covering the runtime contract until upstream
+# adds the annotation.
+@runtime_checkable
+class TimeProperty(Protocol):
+    """Protocol for icalendar property types that expose a ``dt`` value."""
+
+    @property
+    def dt(
+        self,
+    ) -> (
+        date
+        | datetime
+        | timedelta
+        | time
+        | tuple[datetime, datetime]
+        | tuple[datetime, timedelta]
+    ): ...
+
+
+@runtime_checkable
+class TimeListProperty(Protocol):
+    """Protocol for icalendar property types that expose a ``dts`` list."""
+
+    @property
+    def dts(self) -> list[TimeProperty]: ...
 
 
 TzifyFunction = Callable[[datetime], datetime]
@@ -129,7 +159,7 @@ def validate_component(comp, strict=False):
         if isinstance(value, vText):
             for c in _INVALID_CONTROL_CHARACTERS:
                 if c in value:
-                    yield "Invalid character {} in field {}".format(
+                    yield "Invalid character {!r} in field {}".format(
                         c.encode("unicode_escape"),
                         name,
                     )
@@ -1578,7 +1608,7 @@ class ICalendarFile(File):
 
     def __init__(self, content, content_type) -> None:
         super().__init__(content, content_type)
-        self._calendar = None
+        self._calendar: Calendar | None = None
 
     def validate(self) -> None:
         """Verify that file contents are valid."""
@@ -1605,7 +1635,10 @@ class ICalendarFile(File):
     def calendar(self):
         if self._calendar is None:
             try:
-                self._calendar = Calendar.from_ical(b"".join(self.content))
+                self._calendar = cast(
+                    Calendar,
+                    Calendar.from_ical(b"".join(self.content).decode("utf-8")),
+                )
             except ValueError as exc:
                 raise InvalidFileContents(
                     self.content_type, self.content, str(exc)
@@ -1649,7 +1682,7 @@ class ICalendarFile(File):
         except NotImplementedError:
             lines = []
         if not lines:
-            lines = super().describe_delta(name, previous)
+            lines = list(super().describe_delta(name, previous))
         return lines
 
     def describe(self, name):
@@ -1717,6 +1750,7 @@ class ICalendarFile(File):
                             c.name == "VALARM"
                             and prop_name == "TRIGGER"
                             and parent is not None
+                            and isinstance(p, TimeProperty)
                             and isinstance(p.dt, timedelta)
                         ):
                             # Create enriched VALARM to get absolute trigger time.
@@ -1725,12 +1759,14 @@ class ICalendarFile(File):
                             enriched = _create_enriched_valarm(c, parent)
                             if "TRIGGER" in enriched:
                                 ical = enriched["TRIGGER"].to_ical()
+                        if isinstance(ical, str):
+                            ical = ical.encode("utf-8")
                         yield ical
             else:
                 raise AssertionError(f"segments: {segments!r}")
 
 
-def as_tz_aware_ts(dt: datetime | date, default_timezone: str | timezone) -> datetime:
+def as_tz_aware_ts(dt: datetime | date, default_timezone: str | tzinfo) -> datetime:
     if not getattr(dt, "time", None):
         _dt = datetime.combine(dt, time())
     else:
@@ -1861,8 +1897,14 @@ def _normalize_rrule_until(rrule_str: str, dtstart: date | datetime) -> str:
 
 
 def rruleset_from_comp(comp: Component) -> dateutil.rrule.rruleset:
-    dtstart = comp["DTSTART"].dt
-    rrulestr = comp["RRULE"].to_ical().decode("utf-8")
+    dtstart_prop = comp["DTSTART"]
+    assert isinstance(dtstart_prop, TimeProperty)
+    dtstart = dtstart_prop.dt
+    assert isinstance(dtstart, date | datetime)
+    rrule_ical = comp["RRULE"].to_ical()
+    rrulestr = (
+        rrule_ical.decode("utf-8") if isinstance(rrule_ical, bytes) else rrule_ical
+    )
     # Normalize UNTIL to be UTC if dtstart is timezone-aware
     rrulestr = _normalize_rrule_until(rrulestr, dtstart)
     rrule = dateutil.rrule.rrulestr(rrulestr, dtstart=dtstart)
@@ -1893,13 +1935,17 @@ def rruleset_from_comp(comp: Component) -> dateutil.rrule.rruleset:
         # and normalize them to match what the rrule will generate
         if isinstance(exdate_prop, list):
             for exdate_list in exdate_prop:
+                assert isinstance(exdate_list, TimeListProperty)
                 for exdate in exdate_list.dts:
+                    assert isinstance(exdate.dt, date | datetime)
                     normalized = _normalize_to_dtstart_type(
                         exdate.dt, effective_dtstart
                     )
                     rs.exdate(normalized)
         else:
+            assert isinstance(exdate_prop, TimeListProperty)
             for exdate in exdate_prop.dts:
+                assert isinstance(exdate.dt, date | datetime)
                 normalized = _normalize_to_dtstart_type(exdate.dt, effective_dtstart)
                 rs.exdate(normalized)
     if "RDATE" in comp:
@@ -1911,15 +1957,24 @@ def rruleset_from_comp(comp: Component) -> dateutil.rrule.rruleset:
         # and normalize them to match what the rrule will generate
         if isinstance(rdate_prop, list):
             for rdate_list in rdate_prop:
+                assert isinstance(rdate_list, TimeListProperty)
                 for rdate in rdate_list.dts:
+                    assert isinstance(rdate.dt, date | datetime)
                     normalized = _normalize_to_dtstart_type(rdate.dt, effective_dtstart)
                     rs.rdate(normalized)
         else:
+            assert isinstance(rdate_prop, TimeListProperty)
             for rdate in rdate_prop.dts:
+                assert isinstance(rdate.dt, date | datetime)
                 normalized = _normalize_to_dtstart_type(rdate.dt, effective_dtstart)
                 rs.rdate(normalized)
     if "EXRULE" in comp:
-        exrulestr = comp["EXRULE"].to_ical().decode("utf-8")
+        exrule_ical = comp["EXRULE"].to_ical()
+        exrulestr = (
+            exrule_ical.decode("utf-8")
+            if isinstance(exrule_ical, bytes)
+            else exrule_ical
+        )
         # Normalize UNTIL to be UTC if dtstart is timezone-aware
         exrulestr = _normalize_rrule_until(exrulestr, dtstart)
         exrule = dateutil.rrule.rrulestr(exrulestr, dtstart=dtstart)
@@ -1931,11 +1986,26 @@ def rruleset_from_comp(comp: Component) -> dateutil.rrule.rruleset:
 def _get_event_duration(comp: Component) -> timedelta | None:
     """Get the duration of an event/todo component."""
     if "DURATION" in comp:
-        return comp["DURATION"].dt
+        duration_prop = comp["DURATION"]
+        assert isinstance(duration_prop, TimeProperty)
+        assert isinstance(duration_prop.dt, timedelta)
+        return duration_prop.dt
     elif "DTEND" in comp and "DTSTART" in comp:
-        return comp["DTEND"].dt - comp["DTSTART"].dt
+        dtend_prop = comp["DTEND"]
+        dtstart_prop = comp["DTSTART"]
+        assert isinstance(dtend_prop, TimeProperty)
+        assert isinstance(dtstart_prop, TimeProperty)
+        assert isinstance(dtend_prop.dt, date | datetime)
+        assert isinstance(dtstart_prop.dt, date | datetime)
+        return dtend_prop.dt - dtstart_prop.dt
     elif "DUE" in comp and "DTSTART" in comp:
-        return comp["DUE"].dt - comp["DTSTART"].dt
+        due_prop = comp["DUE"]
+        dtstart_prop = comp["DTSTART"]
+        assert isinstance(due_prop, TimeProperty)
+        assert isinstance(dtstart_prop, TimeProperty)
+        assert isinstance(due_prop.dt, date | datetime)
+        assert isinstance(dtstart_prop.dt, date | datetime)
+        return due_prop.dt - dtstart_prop.dt
     return None
 
 
@@ -2000,16 +2070,25 @@ def _event_overlaps_range(comp: Component, start, end) -> bool:
         return False
 
     # Fallback for other component types with DTSTART
-    event_start = tzify(comp["DTSTART"].dt)
+    dtstart_prop = comp["DTSTART"]
+    assert isinstance(dtstart_prop, TimeProperty)
+    assert isinstance(dtstart_prop.dt, date | datetime)
+    event_start = tzify(dtstart_prop.dt)
 
     # Calculate event end time
     if "DTEND" in comp:
-        event_end = tzify(comp["DTEND"].dt)
+        dtend_prop = comp["DTEND"]
+        assert isinstance(dtend_prop, TimeProperty)
+        assert isinstance(dtend_prop.dt, date | datetime)
+        event_end = tzify(dtend_prop.dt)
     elif "DURATION" in comp:
-        event_end = event_start + comp["DURATION"].dt
+        duration_prop = comp["DURATION"]
+        assert isinstance(duration_prop, TimeProperty)
+        assert isinstance(duration_prop.dt, timedelta)
+        event_end = event_start + duration_prop.dt
     else:
         # Default duration
-        if isinstance(comp["DTSTART"].dt, datetime):
+        if isinstance(dtstart_prop.dt, datetime):
             event_end = event_start
         else:
             event_end = event_start + timedelta(days=1)
@@ -2042,6 +2121,9 @@ def _expand_rrule_component(
 
     rs = rruleset_from_comp(incomp)
     original_dtstart = incomp["DTSTART"]
+    assert isinstance(original_dtstart, TimeProperty)
+    original_dtstart_dt = original_dtstart.dt
+    assert isinstance(original_dtstart_dt, date | datetime)
 
     # Create base component without recurrence fields
     base_comp = incomp.copy()
@@ -2064,8 +2146,8 @@ def _expand_rrule_component(
             adjusted_start = start
 
         # Normalize datetimes for rrule operations
-        start_normalized = _normalize_dt_for_rrule(adjusted_start, original_dtstart.dt)
-        end_normalized = _normalize_dt_for_rrule(end, original_dtstart.dt)
+        start_normalized = _normalize_dt_for_rrule(adjusted_start, original_dtstart_dt)
+        end_normalized = _normalize_dt_for_rrule(end, original_dtstart_dt)
 
         # When the query end is unbounded (at MAX_EXPANSION_TIME), limit the number
         # of instances to prevent resource exhaustion with infinite recurrences
@@ -2087,7 +2169,7 @@ def _expand_rrule_component(
 
     for ts in occurrences:
         # Normalize timestamp based on original event type
-        if not isinstance(original_dtstart.dt, datetime):
+        if not isinstance(original_dtstart_dt, datetime):
             ts_normalized = ts.date()
             ts_for_dtstart = ts.date()
         else:
@@ -2113,7 +2195,10 @@ def _expand_rrule_component(
             # Update DTEND or DUE if present
             for end_prop in ("DTEND", "DUE"):
                 if end_prop in outcomp:
-                    original_duration = incomp[end_prop].dt - original_dtstart.dt
+                    end_prop_val = incomp[end_prop]
+                    assert isinstance(end_prop_val, TimeProperty)
+                    assert isinstance(end_prop_val.dt, date | datetime)
+                    original_duration = end_prop_val.dt - original_dtstart_dt
                     new_end = create_prop_from_date_or_datetime(
                         ts_for_dtstart + original_duration
                     )
@@ -2154,7 +2239,10 @@ def expand_calendar_rrule(
     exceptions = {}
     for comp in incal.subcomponents:
         if "RECURRENCE-ID" in comp:
-            ts = asutc(comp["RECURRENCE-ID"].dt)
+            rec_id = comp["RECURRENCE-ID"]
+            assert isinstance(rec_id, TimeProperty)
+            assert isinstance(rec_id.dt, date | datetime)
+            ts = asutc(rec_id.dt)
             exceptions[ts] = comp
 
     # Process all components
@@ -2226,7 +2314,10 @@ def limit_calendar_recurrence_set(
             outcal.add_component(insub)
         else:
             # This is an overridden instance - check if it's relevant to the time range
-            recurrence_id = insub["RECURRENCE-ID"].dt
+            rec_id_prop = insub["RECURRENCE-ID"]
+            assert isinstance(rec_id_prop, TimeProperty)
+            recurrence_id = rec_id_prop.dt
+            assert isinstance(recurrence_id, date | datetime)
 
             # Include if the overridden instance falls within the time range
             # or if it affects instances that would fall within the range
@@ -2274,21 +2365,29 @@ def limit_calendar_recurrence_set(
             if not include:
                 # Get the actual start/end times of this instance
                 if "DTSTART" in insub:
-                    dtstart = insub["DTSTART"].dt
+                    dtstart_prop = insub["DTSTART"]
+                    assert isinstance(dtstart_prop, TimeProperty)
+                    dtstart = dtstart_prop.dt
+                    assert isinstance(dtstart, date | datetime)
                     if isinstance(dtstart, datetime):
-                        dtstart_utc = asutc(dtstart)
+                        dtstart_utc: date | datetime = asutc(dtstart)
                     else:
                         dtstart_utc = dtstart
 
                     if "DTEND" in insub:
-                        dtend = insub["DTEND"].dt
+                        dtend_prop = insub["DTEND"]
+                        assert isinstance(dtend_prop, TimeProperty)
+                        dtend = dtend_prop.dt
+                        assert isinstance(dtend, date | datetime)
                         if isinstance(dtend, datetime):
-                            dtend_utc = asutc(dtend)
+                            dtend_utc: date | datetime = asutc(dtend)
                         else:
                             dtend_utc = dtend
                     elif "DURATION" in insub:
-                        duration = insub["DURATION"].dt
-                        dtend_utc = dtstart_utc + duration
+                        duration_prop = insub["DURATION"]
+                        assert isinstance(duration_prop, TimeProperty)
+                        assert isinstance(duration_prop.dt, timedelta)
+                        dtend_utc = dtstart_utc + duration_prop.dt
                     else:
                         # No explicit end time - treat as instant event
                         dtend_utc = dtstart_utc

@@ -254,13 +254,19 @@ class ObjectResource(webdav.Resource):
         file = await self.get_file()
         return file.content
 
-    async def set_body(self, data, replace_etag=None, remote_user=None, requester=None):
+    async def set_body(
+        self,
+        data: Iterable[bytes],
+        replace_etag: str | None = None,
+        remote_user: str | None = None,
+        requester: str | None = None,
+    ) -> str:
         try:
             (name, etag) = await asyncio.to_thread(
                 self.store.import_one,
                 self.name,
                 self.content_type,
-                data,
+                list(data),
                 replace_etag=extract_strong_etag(replace_etag),
                 remote_user=remote_user,
                 requester=requester,
@@ -1958,7 +1964,7 @@ class RootPage(webdav.Resource):
 
             img = qr.make_image(fill_color="black", back_color="white")
             buffer = io.BytesIO()
-            img.save(buffer, format="PNG")
+            img.save(buffer, format="PNG")  # type: ignore[call-arg]
             qr_code_data = base64.b64encode(buffer.getvalue()).decode()
 
         principals = self.backend.find_principals() if self.show_principals else []
@@ -2021,6 +2027,9 @@ class RootPage(webdav.Resource):
 
 
 class Principal(webdav.Principal):
+    backend: "SingleUserFilesystemBackend"
+    relpath: str
+
     def get_principal_url(self):
         return "."
 
@@ -2248,7 +2257,7 @@ class PrincipalCollection(Collection, Principal):
 
     @classmethod
     def create(cls, backend, relpath):
-        p = super().create(backend, relpath)
+        p = super().create(backend, relpath)  # type: ignore[misc]
         p.store.set_type(STORE_TYPE_PRINCIPAL)
         to_create = set()
         to_create.update(p.get_addressbook_home_set())
@@ -3080,7 +3089,10 @@ async def main(options, parser):
             metrics_app.router.add_get("/metrics", metrics, name="metrics")
 
         # For now, just always claim everything is okay.
-        metrics_app.router.add_get("/health", lambda r: web.Response(text="ok"))
+        async def _health(request):
+            return web.Response(text="ok")
+
+        metrics_app.router.add_get("/health", _health)
     else:
         metrics_app = None
 
@@ -3120,7 +3132,7 @@ async def main(options, parser):
 
     runner = web.AppRunner(app)
     await runner.setup()
-    sites = []
+    sites: list[web.BaseSite] = []
     if metrics_app:
         metrics_runner = web.AppRunner(metrics_app)
         await metrics_runner.setup()

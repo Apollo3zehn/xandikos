@@ -506,7 +506,10 @@ async def main(options, parser):
             app.middlewares.insert(0, metrics_middleware)
             metrics_app.router.add_get("/metrics", metrics, name="metrics")
 
-        metrics_app.router.add_get("/health", lambda r: web.Response(text="ok"))
+        async def _health(request):
+            return web.Response(text="ok")
+
+        metrics_app.router.add_get("/health", _health)
     else:
         metrics_app = None
 
@@ -546,7 +549,7 @@ async def main(options, parser):
 
     runner = web.AppRunner(app)
     await runner.setup()
-    sites = []
+    sites: list[web.BaseSite] = []
     if metrics_app:
         metrics_runner = web.AppRunner(metrics_app)
         await metrics_runner.setup()

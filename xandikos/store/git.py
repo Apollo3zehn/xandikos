@@ -33,7 +33,12 @@ from collections.abc import Sequence
 
 import dulwich.repo
 from dulwich.file import FileLocked
-from dulwich.index import IndexEntry, index_entry_from_stat, locked_index
+from dulwich.index import (
+    ConflictedIndexEntry,
+    IndexEntry,
+    index_entry_from_stat,
+    locked_index,
+)
 from dulwich.objects import Blob, Commit, Tree
 from dulwich.porcelain import get_user_identity
 
@@ -270,11 +275,11 @@ class GitStore(Store):
         self.ref = repo.refs.follow(ref)[0][-1]
         self.repo = repo
         # Disable automatic garbage collection
-        self.repo._autogc_disabled = True
-        # Maps uids to (sha, fname)
-        self._uid_to_fname: dict[str, tuple[bytes, str]] = {}
-        # Set of blob ids that have already been scanned
-        self._fname_to_uid: dict[str, tuple[str, str]] = {}
+        self.repo._autogc_disabled = True  # type: ignore[attr-defined]
+        # Maps uids to (fname, etag)
+        self._uid_to_fname: dict[str, tuple[str, str]] = {}
+        # Maps fname to (etag, uid)
+        self._fname_to_uid: dict[str, tuple[str, str | None]] = {}
         # Guards mutations of the uid maps above so that concurrent
         # _scan_uids callers don't race in the terminal cleanup loop.
         self._uid_lock = threading.Lock()
@@ -455,10 +460,11 @@ class GitStore(Store):
         # can be expensive) happens outside the lock.
         with self._uid_lock:
             existing = dict(self._fname_to_uid)
-        new_fname_to_uid: dict[str, tuple[str, str]] = {}
-        new_uid_to_fname: dict[str, tuple[bytes, str]] = {}
+        new_fname_to_uid: dict[str, tuple[str, str | None]] = {}
+        new_uid_to_fname: dict[str, tuple[str, str]] = {}
         for name, mode, sha in self._iterblobs():
             etag = sha.decode("ascii")
+            uid: str | None
             cached = existing.get(name)
             if cached is not None and cached[0] == etag:
                 new_fname_to_uid[name] = cached
@@ -520,7 +526,7 @@ class GitStore(Store):
         """
         try:
             repo = dulwich.repo.Repo(path)
-            repo._autogc_disabled = True
+            repo._autogc_disabled = True  # type: ignore[attr-defined]
             return cls.open(repo, **kwargs)
         except dulwich.repo.NotGitRepository:
             raise NotStoreError(path)
@@ -682,8 +688,8 @@ class BareGitStore(GitStore):
 
     def __init__(self, repo, **kwargs) -> None:
         super().__init__(repo, **kwargs)
-        self._cached_tree = None
-        self._cached_ref_target = None
+        self._cached_tree: Tree | None = None
+        self._cached_ref_target: bytes | None = None
 
     def _get_current_tree(self):
         try:
@@ -695,6 +701,7 @@ class BareGitStore(GitStore):
         if current_ref == self._cached_ref_target and self._cached_tree is not None:
             return self._cached_tree
         ref_object = self.repo[current_ref]
+        tree: Tree
         if isinstance(ref_object, Tree):
             tree = ref_object
         else:
@@ -849,7 +856,7 @@ class BareGitStore(GitStore):
         """
         os.mkdir(path)
         repo = dulwich.repo.Repo.init_bare(path)
-        repo._autogc_disabled = True
+        repo._autogc_disabled = True  # type: ignore[attr-defined]
         return cls(repo)
 
     def subdirectories(self):
@@ -906,13 +913,16 @@ class TreeGitStore(GitStore):
         """
         os.mkdir(path)
         repo = dulwich.repo.Repo.init(path)
-        repo._autogc_disabled = True
+        repo._autogc_disabled = True  # type: ignore[attr-defined]
         return cls(repo)
 
     def get_etag(self, name):
         index, _ctag = self._open_index()
         name = name.encode(DEFAULT_ENCODING)
-        return index[name].sha.decode("ascii")
+        entry = index[name]
+        if isinstance(entry, ConflictedIndexEntry):
+            raise KeyError(name)
+        return entry.sha.decode("ascii")
 
     def _commit_tree(self, index, message):
         tree = index.commit(self.repo.object_store)

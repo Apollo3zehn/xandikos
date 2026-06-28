@@ -524,7 +524,9 @@ def parse_comp_filter(el: ET.Element, cls):
     return comp_filter
 
 
-def parse_filter(filter_el: ET.Element, cls):
+def parse_filter(filter_el: ET.Element | None, cls):
+    if filter_el is None:
+        return cls
     for subel in filter_el:
         if subel.tag == "{urn:ietf:params:xml:ns:caldav}comp-filter":
             parse_comp_filter(subel, cls.filter_subcomponent)
@@ -1140,7 +1142,7 @@ def process_vavailability_components(components, start, end, tzify):
     """
     # Create a timeline to track busy/free periods
     # Each entry is (start_time, end_time, fbtype, priority)
-    timeline = []
+    timeline: list[tuple[datetime.datetime, datetime.datetime, str, int]] = []
 
     # Sort components by priority (0=undefined, 9=lowest, 1=highest)
     # Process from lowest priority to highest so higher priority can override
