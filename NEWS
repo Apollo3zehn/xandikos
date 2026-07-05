@@ -1,3 +1,27 @@
+0.4.4	2026-07-05
+
+ * Add WebDAV-Push support, notifying subscribed clients of collection
+   changes. (Jelmer Vernooĳ)
+
+ * icalendar: reject and normalize empty VTIMEZONE blocks. (Jelmer Vernooĳ)
+
+ * Accept a non-zero ``Depth`` header for addressbook-multiget reports.
+   (Jelmer Vernooĳ, #692)
+
+ * Return 412 Precondition Failed when a ``pre_put_hook`` raises a
+   precondition failure. (Jelmer Vernooĳ)
+
+ * Handle ``OutOfSpace`` more gracefully. (Jelmer Vernooĳ)
+
+ * web: apply the ``SCRIPT_NAME`` prefix to the schedule-default-calendar
+   URL. (Jelmer Vernooĳ)
+
+ * caldav: don't path-quote scheme URIs in calendar-user-address-set.
+   (Jelmer Vernooĳ)
+
+ * web: only fall back to the ``EMAIL`` environment variable in
+   single-user mode. (Jelmer Vernooĳ)
+
 0.4.3	2026-05-26
 
  * milter: don't tell the MTA to skip RCPT events, fixing rejection of
