@@ -223,7 +223,8 @@ class RRuleIndexUsageTest(unittest.TestCase):
         }
 
         # Should return False when essential data is missing
-        result = filter.check_from_indexes("test.ics", incomplete_indexes)
+        with self.assertLogs("xandikos", level="WARNING"):
+            result = filter.check_from_indexes("test.ics", incomplete_indexes)
         self.assertFalse(result, "Should return False when DTSTART is missing")
 
         # Test with missing component marker - this should raise InsufficientIndexDataError

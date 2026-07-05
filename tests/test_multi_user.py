@@ -20,6 +20,8 @@
 """Tests for xandikos.multi_user module."""
 
 import argparse
+import contextlib
+import io
 import os
 import shutil
 import tempfile
@@ -324,7 +326,7 @@ class AddParserTests(unittest.TestCase):
         parser = argparse.ArgumentParser()
         add_parser(parser)
 
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             parser.parse_args([])
 
     def test_add_parser_custom_principal_paths(self):
