@@ -307,16 +307,17 @@ class ExpandPropertyReporterTests(unittest.TestCase):
 
             resource = Mock()
 
-            response = await reporter.report(
-                environ={},
-                request_body=body,
-                resources_by_hrefs=lambda hrefs: [],
-                properties={},
-                href="/test",
-                resource=resource,
-                depth="0",
-                strict=True,
-            )
+            with self.assertLogs("xandikos", level="WARNING"):
+                response = await reporter.report(
+                    environ={},
+                    request_body=body,
+                    resources_by_hrefs=lambda hrefs: [],
+                    properties={},
+                    href="/test",
+                    resource=resource,
+                    depth="0",
+                    strict=True,
+                )
 
             # Parse response
             xml_content = b"".join(response.body)

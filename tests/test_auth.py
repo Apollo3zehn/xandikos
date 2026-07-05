@@ -20,9 +20,11 @@
 """Tests for authentication handling in xandikos."""
 
 import asyncio
+import gc
 import tempfile
 import shutil
 import unittest
+import warnings
 from unittest.mock import MagicMock, AsyncMock
 from wsgiref.util import setup_testing_defaults
 
@@ -55,8 +57,7 @@ class AuthenticationTests(unittest.TestCase):
 
     def tearDown(self):
         self.loop.close()
-        # Reset the event loop to avoid affecting other tests
-        asyncio.set_event_loop(asyncio.new_event_loop())
+        asyncio.set_event_loop(None)
 
     def test_wsgi_x_remote_user_header(self):
         """Test that HTTP_X_REMOTE_USER is handled in WSGI."""
@@ -144,7 +145,11 @@ class AuthenticationTests(unittest.TestCase):
         self.backend.resources["/"] = mock_resource
 
         # Call the aiohttp handler
-        self.loop.run_until_complete(self.app.aiohttp_handler(mock_request, "/"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            warnings.simplefilter("ignore", ResourceWarning)
+            self.loop.run_until_complete(self.app.aiohttp_handler(mock_request, "/"))
+            gc.collect()
 
         # Check that set_principal was called with the user
         self.assertEqual(["aiohttpuser"], self.backend.set_principal_calls)
@@ -171,7 +176,11 @@ class AuthenticationTests(unittest.TestCase):
         self.backend.resources["/"] = mock_resource
 
         # Call the aiohttp handler
-        self.loop.run_until_complete(self.app.aiohttp_handler(mock_request, "/"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            warnings.simplefilter("ignore", ResourceWarning)
+            self.loop.run_until_complete(self.app.aiohttp_handler(mock_request, "/"))
+            gc.collect()
 
         # Check that set_principal was NOT called
         self.assertEqual([], self.backend.set_principal_calls)
@@ -188,8 +197,7 @@ class IntegrationTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.d)
         self.loop.close()
-        # Reset the event loop to avoid affecting other tests
-        asyncio.set_event_loop(asyncio.new_event_loop())
+        asyncio.set_event_loop(None)
 
     def test_multiuser_backend_with_aiohttp_auth(self):
         """Test MultiUserFilesystemBackend with aiohttp authentication."""
@@ -216,7 +224,11 @@ class IntegrationTests(unittest.TestCase):
         mock_request.can_read_body = False
 
         # Call the aiohttp handler
-        self.loop.run_until_complete(app.aiohttp_handler(mock_request, "/"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            warnings.simplefilter("ignore", ResourceWarning)
+            self.loop.run_until_complete(app.aiohttp_handler(mock_request, "/"))
+            gc.collect()
 
         # Check that the principal was created
         resource = backend.get_resource("/alice/")

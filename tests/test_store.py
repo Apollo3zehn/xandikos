@@ -17,7 +17,6 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
 # MA  02110-1301, USA.
 
-import logging
 import os
 import shutil
 import stat
@@ -360,12 +359,11 @@ class BaseGitStoreTest(BaseStoreTest):
         self.assertEqual(gc.repo.path, os.path.join(d, "store"))
 
     def test_iter_with_etag_missing_uid(self):
-        logging.getLogger("").setLevel(logging.ERROR)
         gc = self.create_store()
         bid = self.add_blob(gc, "foo.ics", EXAMPLE_VCALENDAR_NO_UID)
         self.assertEqual([("foo.ics", "text/calendar", bid)], list(gc.iter_with_etag()))
-        gc._scan_uids()
-        logging.getLogger("").setLevel(logging.NOTSET)
+        with self.assertLogs("xandikos", level="WARNING"):
+            gc._scan_uids()
 
     def test_iter_with_etag(self):
         gc = self.create_store()

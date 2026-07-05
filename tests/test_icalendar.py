@@ -1436,7 +1436,8 @@ class TextMatchTest(unittest.TestCase):
 
     def test_unknown_type(self):
         tm = TextMatcher("dontknow", "foobar")
-        self.assertFalse(tm.match(object()))
+        with self.assertLogs("xandikos", level="WARNING"):
+            self.assertFalse(tm.match(object()))
         # With substring matching, "foobar" is found in "foobarblah"
         self.assertTrue(tm.match_indexes({None: [b"foobarblah"]}))
 

@@ -20,9 +20,10 @@
 import logging
 import unittest
 
-# Configure logging to hide DEBUG output from dulwich
+# Configure logging to hide noisy output during tests
 logging.getLogger("dulwich").setLevel(logging.WARNING)
 logging.getLogger("asyncio").setLevel(logging.WARNING)
+logging.getLogger("xandikos").setLevel(logging.WARNING)
 
 
 def test_suite():

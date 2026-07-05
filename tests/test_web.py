@@ -2912,11 +2912,12 @@ class OutboundIMIPTests(unittest.TestCase):
                 raise imip_transport.IMIPTransportError("relay refused")
 
         self.backend.imip_transport = FailingTransport()
-        rewritten = asyncio.run(
-            self._alice_calendar().pre_put_hook(
-                "event.ics", [self.EVENT_REMOTE_ATTENDEE], "text/calendar"
+        with self.assertLogs("xandikos", level="WARNING"):
+            rewritten = asyncio.run(
+                self._alice_calendar().pre_put_hook(
+                    "event.ics", [self.EVENT_REMOTE_ATTENDEE], "text/calendar"
+                )
             )
-        )
         params = self._stored_attendee_params(b"".join(rewritten))
         self.assertEqual(
             "5.1;Service unavailable",
