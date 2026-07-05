@@ -469,6 +469,18 @@ class Resource:
         """Set the resource types."""
         raise NotImplementedError(self.set_resource_types)
 
+    def iter_principals(self) -> Iterable[tuple[str, "Resource"]]:
+        """Iterate over the principals reachable from this resource.
+
+        Used by principal-property-search to enumerate candidate
+        principals without walking the entire collection subtree.
+
+        Returns: iterator of (relative href, principal resource) tuples.
+        :raise NotImplementedError: if the resource can't enumerate principals,
+            in which case callers fall back to traversing members.
+        """
+        raise NotImplementedError(self.iter_principals)
+
     def get_displayname(self) -> str:
         """Get the resource display name."""
         raise KeyError
@@ -991,6 +1003,30 @@ class PrincipalURLProperty(Property):
         el.append(
             create_href(ensure_trailing_slash(resource.get_principal_url()), href)
         )
+
+
+class PrincipalCollectionSetProperty(Property):
+    """Provides {DAV:}principal-collection-set.
+
+    See https://tools.ietf.org/html/rfc3744, section 5.8
+    """
+
+    name = "{DAV:}principal-collection-set"
+    resource_type = None
+    in_allprops = False
+    live = True
+
+    def __init__(self, get_principal_collection_set) -> None:
+        super().__init__()
+        self.get_principal_collection_set = get_principal_collection_set
+
+    async def get_value(self, href, resource, el, environ):
+        for relpath in self.get_principal_collection_set():
+            rel = relpath.lstrip("/")
+            # Root maps to an empty relative href so urljoin keeps the
+            # SCRIPT_NAME base rather than treating "/" as absolute.
+            rel = ensure_trailing_slash(rel) if rel else ""
+            el.append(create_href(rel, environ["SCRIPT_NAME"]))
 
 
 class SupportedReportSetProperty(Property):
@@ -1866,6 +1902,184 @@ class ExpandPropertyReporter(Reporter):
             strict,
         ):
             yield resp
+
+
+def _match_text(value: str, match_text: str) -> bool:
+    """Case-insensitive substring match used by principal-property-search.
+
+    RFC 3744 does not mandate a collation; a case-insensitive substring
+    match matches what clients expect and what other servers implement.
+    """
+    return match_text.casefold() in value.casefold()
+
+
+async def _principal_property_matches(
+    href: str,
+    resource: Resource,
+    properties: dict[str, Property],
+    environ,
+    prop_el: ET.Element,
+    match_text: str,
+) -> bool:
+    """Evaluate a single DAV:property-search against a principal.
+
+    A search matches if any of the requested properties are set on the
+    resource and contain the match string (as text) somewhere in their
+    value.
+    """
+    for propreq in prop_el:
+        propstat = await get_property_from_element(
+            href, resource, properties, environ, propreq
+        )
+        if propstat.statuscode != "200 OK":
+            continue
+        for text in propstat.prop.itertext():
+            if _match_text(text, match_text):
+                return True
+    return False
+
+
+async def _iter_search_principals(
+    resource: Resource, base_href: str, environ
+) -> AsyncIterable[tuple[str, Resource]]:
+    """Yield (href, principal) pairs under a single search root.
+
+    Prefers the resource's ``iter_principals`` hook, which lets a backend
+    enumerate principals directly instead of walking (and opening) every
+    collection in the subtree. Falls back to a depth-infinity traversal,
+    filtering for principal resources.
+    """
+    try:
+        principals = list(resource.iter_principals())
+    except NotImplementedError:
+        async for href, candidate in traverse_resource(resource, base_href, "infinity"):
+            if PRINCIPAL_RESOURCE_TYPE in candidate.resource_types:
+                yield href, candidate
+    else:
+        script_name = environ.get("SCRIPT_NAME", "")
+        for relpath, candidate in principals:
+            href = urllib.parse.urljoin(
+                ensure_trailing_slash(script_name), relpath.lstrip("/")
+            )
+            yield ensure_trailing_slash(href), candidate
+
+
+async def _iter_search_roots(
+    roots: Iterable[tuple[str, Resource]], environ
+) -> AsyncIterable[tuple[str, Resource]]:
+    """Yield (href, principal) pairs across all search roots, deduplicated."""
+    seen: set[str] = set()
+    for base_href, resource in roots:
+        async for href, candidate in _iter_search_principals(
+            resource, base_href, environ
+        ):
+            if href in seen:
+                continue
+            seen.add(href)
+            yield href, candidate
+
+
+async def _principal_collection_set_roots(
+    resource: Resource,
+    properties: dict[str, Property],
+    resources_by_hrefs: Callable[[Iterable[str]], Iterable[tuple[str, Resource]]],
+    environ,
+) -> list[tuple[str, Resource]]:
+    """Resolve the collections named in the resource's principal-collection-set.
+
+    Used to honour DAV:apply-to-principal-collection-set: the search is
+    applied to the principals under each collection in the property rather
+    than under the request-URI.
+    """
+    propstat = await get_property_from_name(
+        "/", resource, properties, "{DAV:}principal-collection-set", environ
+    )
+    if propstat.statuscode != "200 OK":
+        return []
+    hrefs = list(
+        filter(
+            None,
+            (read_href_element(child) for child in propstat.prop),
+        )
+    )
+    return list(resources_by_hrefs(hrefs))
+
+
+class PrincipalPropertySearchReporter(Reporter):
+    """principal-property-search reporter.
+
+    See https://tools.ietf.org/html/rfc3744, section 9.4.
+    """
+
+    name = "{DAV:}principal-property-search"
+
+    @multistatus
+    async def report(  # noqa: C901
+        self,
+        environ,
+        request_body,
+        resources_by_hrefs,
+        properties,
+        base_href,
+        resource,
+        depth,
+        strict,
+    ):
+        test = request_body.get("test", "allof")
+        if test not in ("allof", "anyof"):
+            raise BadRequestError(f"invalid test attribute {test!r}")
+        searches: list[tuple[ET.Element, str]] = []
+        requested = None
+        apply_to_collection_set = False
+        for el in request_body:
+            if el.tag == "{DAV:}property-search":
+                prop_el = el.find("{DAV:}prop")
+                match_el = el.find("{DAV:}match")
+                if prop_el is None or match_el is None:
+                    nonfatal_bad_request(
+                        "property-search requires prop and match", strict
+                    )
+                    continue
+                searches.append((prop_el, match_el.text or ""))
+            elif el.tag == "{DAV:}prop":
+                requested = el
+            elif el.tag == "{DAV:}apply-to-principal-collection-set":
+                apply_to_collection_set = True
+            else:
+                nonfatal_bad_request(f"unknown tag {el.tag}", strict)
+
+        if not searches:
+            raise BadRequestError("no property-search elements")
+
+        if apply_to_collection_set:
+            search_roots = await _principal_collection_set_roots(
+                resource, properties, resources_by_hrefs, environ
+            )
+        else:
+            search_roots = [(base_href, resource)]
+
+        async for candidate_href, candidate in _iter_search_roots(
+            search_roots, environ
+        ):
+            results = [
+                await _principal_property_matches(
+                    candidate_href, candidate, properties, environ, prop_el, match_text
+                )
+                for (prop_el, match_text) in searches
+            ]
+            matched = any(results) if test == "anyof" else all(results)
+            if not matched:
+                continue
+            if requested is not None:
+                propstat = [
+                    ps
+                    async for ps in get_properties(
+                        candidate_href, candidate, properties, environ, requested
+                    )
+                ]
+            else:
+                propstat = []
+            yield Status(candidate_href, "200 OK", propstat=propstat)
 
 
 class SupportedLockProperty(Property):

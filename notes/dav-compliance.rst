@@ -142,14 +142,14 @@ DAV Properties
 - DAV:acl [not supported]
 - DAV:acl-restrictions [not supported]
 - DAV:inherited-acl-set [not supported]
-- DAV:principal-collection-set [not supported]
+- DAV:principal-collection-set [supported]
 
 DAV Reports
 ^^^^^^^^^^^
 
 - DAV:acl-principal-prop-set [not supported]
 - DAV:principal-match [not supported]
-- DAV:principal-property-search [not supported]
+- DAV:principal-property-search [supported]
 - DAV:principal-search-property-set [not supported]
 
 rfc4791.txt (CalDAV)

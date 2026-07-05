@@ -2010,6 +2010,9 @@ class RootPage(webdav.Resource):
     def get_member(self, name):
         return self.backend.get_resource("/" + name)
 
+    def iter_principals(self):
+        return self.backend.iter_principals()
+
     def delete_member(self, name, etag=None, remote_user=None, requester=None):
         # This doesn't have any non-collection members.
         self.get_member("/" + name).destroy()
@@ -2328,6 +2331,25 @@ class SingleUserFilesystemBackend(FilesystemBackend):
         """List all of the principals on this server."""
         return self._user_principals
 
+    def get_principal_collection_set(self):
+        """Return the collections under which all principals are found.
+
+        RFC 3744 5.8: the parent collections of the server's principals.
+        Falls back to the root collection when no principals are known,
+        so clients can still discover a search root.
+        """
+        parents = {
+            posixpath.dirname(p.rstrip("/")) or "/" for p in self._user_principals
+        }
+        return parents or {"/"}
+
+    def iter_principals(self):
+        """Yield (relpath, principal) pairs for all principals."""
+        for relpath in self._user_principals:
+            principal = self.get_principal(relpath)
+            if principal is not None:
+                yield (relpath, principal)
+
     def get_principal(self, relpath: str) -> "Principal | None":
         relpath = posixpath.normpath(relpath)
         if relpath not in self._user_principals:
@@ -2404,6 +2426,9 @@ class XandikosApp(webdav.WebDAVApp):
                 webdav.ResourceTypeProperty(),
                 webdav.CurrentUserPrincipalProperty(get_current_user_principal),
                 webdav.PrincipalURLProperty(),
+                webdav.PrincipalCollectionSetProperty(
+                    backend.get_principal_collection_set
+                ),
                 webdav.DisplayNameProperty(),
                 webdav.GetETagProperty(),
                 webdav.GetContentTypeProperty(),
@@ -2476,6 +2501,7 @@ class XandikosApp(webdav.WebDAVApp):
                 carddav.AddressbookMultiGetReporter(),
                 carddav.AddressbookQueryReporter(),
                 webdav.ExpandPropertyReporter(),
+                webdav.PrincipalPropertySearchReporter(),
                 sync.SyncCollectionReporter(),
                 caldav.FreeBusyQueryReporter(),
             ]
