@@ -73,6 +73,12 @@ from xandikos.store.memory import MemoryStore  # noqa: E402
 SMALL_COLLECTION = 50
 LARGE_COLLECTION = 500
 
+# Birthday-style collections use smaller sizes because each item has an
+# unbounded yearly RRULE that historically expanded to MAX_RECURRENCE_INSTANCES
+# per file on the fallback path. See bench_rrule.py.
+BIRTHDAY_SMALL_COLLECTION = 50
+BIRTHDAY_LARGE_COLLECTION = 200
+
 
 def _make_vcalendar(i: int, base_date: datetime) -> bytes:
     """Generate a VCALENDAR with a single VEVENT."""
@@ -87,6 +93,28 @@ def _make_vcalendar(i: int, base_date: datetime) -> bytes:
         + f"DTSTART:{event_date.strftime('%Y%m%dT%H%M%SZ')}\r\n".encode()
         + f"DTEND:{end_date.strftime('%Y%m%dT%H%M%SZ')}\r\n".encode()
         + f"SUMMARY:Benchmark Event {i}\r\n".encode()
+        + b"END:VEVENT\r\n"
+        b"END:VCALENDAR\r\n"
+    )
+
+
+def _make_birthday_vcalendar(i: int) -> bytes:
+    """Generate a VCALENDAR with a yearly-recurring all-day VEVENT.
+
+    Mirrors the birthday calendars produced by DAVx5/KOrganizer that
+    motivated PR #703: each file has one FREQ=YEARLY event with no UNTIL.
+    """
+    month = 1 + (i % 12)
+    day = 1 + (i % 28)
+    return (
+        b"BEGIN:VCALENDAR\r\n"
+        b"VERSION:2.0\r\n"
+        b"PRODID:-//Xandikos Bench//EN\r\n"
+        b"BEGIN:VEVENT\r\n"
+        + f"UID:bench-bday-{i}@example.com\r\n".encode()
+        + f"DTSTART;VALUE=DATE:1980{month:02d}{day:02d}\r\n".encode()
+        + f"SUMMARY:Birthday {i}\r\n".encode()
+        + b"RRULE:FREQ=YEARLY\r\n"
         + b"END:VEVENT\r\n"
         b"END:VCALENDAR\r\n"
     )
@@ -113,6 +141,19 @@ def _populate_store(store, n):
         name = f"event-{i}.ics"
         (name, etag) = _import_one(
             store, name, "text/calendar", [_make_vcalendar(i, base_date)]
+        )
+        etags[name] = etag
+    return etags
+
+
+def _populate_birthday_store(store, n):
+    """Add *n* yearly-recurring events (birthdays) to *store*."""
+    store.load_extra_file_handler(ICalendarFile)
+    etags = {}
+    for i in range(n):
+        name = f"bday-{i}.ics"
+        (name, etag) = _import_one(
+            store, name, "text/calendar", [_make_birthday_vcalendar(i)]
         )
         etags[name] = etag
     return etags
@@ -173,6 +214,48 @@ def memory_store_small():
 def memory_store_large():
     store = MemoryStore()
     etags = _populate_store(store, LARGE_COLLECTION)
+    return store, etags
+
+
+@pytest.fixture(scope="session")
+def bare_birthday_store_small():
+    store = BareGitStore.create_memory()
+    etags = _populate_birthday_store(store, BIRTHDAY_SMALL_COLLECTION)
+    return store, etags
+
+
+@pytest.fixture(scope="session")
+def bare_birthday_store_large():
+    store = BareGitStore.create_memory()
+    etags = _populate_birthday_store(store, BIRTHDAY_LARGE_COLLECTION)
+    return store, etags
+
+
+@pytest.fixture(scope="session")
+def tree_birthday_store_small(_tree_store_dir):
+    store = TreeGitStore.create(os.path.join(_tree_store_dir, "bday-small"))
+    etags = _populate_birthday_store(store, BIRTHDAY_SMALL_COLLECTION)
+    return store, etags
+
+
+@pytest.fixture(scope="session")
+def tree_birthday_store_large(_tree_store_dir):
+    store = TreeGitStore.create(os.path.join(_tree_store_dir, "bday-large"))
+    etags = _populate_birthday_store(store, BIRTHDAY_LARGE_COLLECTION)
+    return store, etags
+
+
+@pytest.fixture(scope="session")
+def memory_birthday_store_small():
+    store = MemoryStore()
+    etags = _populate_birthday_store(store, BIRTHDAY_SMALL_COLLECTION)
+    return store, etags
+
+
+@pytest.fixture(scope="session")
+def memory_birthday_store_large():
+    store = MemoryStore()
+    etags = _populate_birthday_store(store, BIRTHDAY_LARGE_COLLECTION)
     return store, etags
 
 
