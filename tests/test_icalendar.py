@@ -719,6 +719,60 @@ class CalendarFilterTests(unittest.TestCase):
         )
         self.assertTrue(filter.check("file", self.cal))
 
+    def test_comp_time_range_absent_component_short_circuits(self):
+        # Regression: a comp-filter with a time-range on a component that is
+        # absent from the file (e.g. VTODO in a calendar containing only
+        # VEVENTs) must resolve to False from indexes alone, without falling
+        # back through InsufficientIndexDataError. This is the fast path that
+        # keeps empty VTODO/VJOURNAL queries from expanding recurrences for
+        # every file in the collection.
+        filter = CalendarFilter(ZoneInfo("UTC"))
+        filter.filter_subcomponent("VCALENDAR").filter_subcomponent(
+            "VTODO"
+        ).filter_time_range(
+            self._tzify(datetime(2026, 4, 6, 0, 4, 0)),
+            self._tzify(datetime(2027, 4, 6, 0, 4, 0)),
+        )
+        # Indexes as they would be returned for a file with only VEVENTs:
+        # C=VCALENDAR/C=VTODO is present in the index but empty.
+        indexes = {
+            "C=VCALENDAR/C=VTODO": [],
+            "C=VCALENDAR/C=VTODO/P=DTSTART": [],
+            "C=VCALENDAR/C=VTODO/P=DUE": [],
+            "C=VCALENDAR/C=VTODO/P=DURATION": [],
+            "C=VCALENDAR/C=VTODO/P=CREATED": [],
+            "C=VCALENDAR/C=VTODO/P=COMPLETED": [],
+            "C=VCALENDAR/C=VTODO/P=RRULE": [],
+        }
+        self.assertFalse(filter.check_from_indexes("file", indexes))
+
+    def test_comp_time_range_lazy_rrule_expansion(self):
+        # Regression: _get_occurrences_in_range must not eagerly materialize up
+        # to MAX_RECURRENCE_INSTANCES entries when the query end is unbounded.
+        # It should return an iterator so _test_occurrences can stop on the
+        # first match.
+        from xandikos.icalendar import (
+            ComponentTimeRangeMatcher,
+            MAX_EXPANSION_TIME,
+        )
+        from dateutil.rrule import rrule as _rrule, YEARLY
+
+        matcher = ComponentTimeRangeMatcher(
+            self._tzify(datetime(2026, 1, 1)),
+            MAX_EXPANSION_TIME,
+            comp="VEVENT",
+        )
+        dtstart = self._tzify(datetime(2000, 5, 27, 22, 19, 52))
+        rr = _rrule(YEARLY, dtstart=dtstart)
+        occurrences = matcher._get_occurrences_in_range(
+            rr, dtstart, matcher.start, matcher.end
+        )
+        # The result must be lazy: not a materialized list/tuple.
+        self.assertNotIsInstance(occurrences, (list, tuple))
+        # And it must still yield the expected occurrences within the range.
+        first = next(iter(occurrences))
+        self.assertEqual(first, self._tzify(datetime(2026, 5, 27, 22, 19, 52)))
+
     def test_filter_rrule_without_dtstart(self):
         # A stored VTODO with RRULE but no DTSTART (RFC 5545 3.8.5.3 makes it
         # malformed) must not crash either filter path. Both warn and skip.
