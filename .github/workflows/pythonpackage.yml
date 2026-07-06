@@ -46,8 +46,10 @@ jobs:
         run: |
           pip install -U ".[typing]"
           python -m mypy xandikos
-      - name: Test suite run
+      - name: Install subunit
         run: |
-          python -m unittest tests.test_suite
+          python -m pip install python-subunit
+      - name: Test suite run
+        uses: jelmer/inquest@main
         env:
           PYTHONHASHSEED: random
