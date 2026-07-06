@@ -1,3 +1,9 @@
+0.4.5	UNRELEASED
+
+ * Implement the RFC 3744 ``principal-property-search`` REPORT, the
+   ``principal-collection-set`` property, and the
+   ``apply-to-principal-collection-set`` search flag. (Jelmer Vernooĳ)
+
 0.4.4	2026-07-05
 
  * Add WebDAV-Push support, notifying subscribed clients of collection
