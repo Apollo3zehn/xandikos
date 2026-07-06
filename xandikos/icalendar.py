@@ -1030,12 +1030,14 @@ class ComponentTimeRangeMatcher:
         )
         max_date = MAX_EXPANSION_TIME.date()
         if query_end_date >= max_date:
-            # Use xafter with count limit for unbounded queries
-            occurrences = list(
-                rrule.xafter(start_normalized, count=MAX_RECURRENCE_INSTANCES, inc=True)
+            # Use a lazy xafter iterator so matching can stop at the first hit.
+            return (
+                occ
+                for occ in rrule.xafter(
+                    start_normalized, count=MAX_RECURRENCE_INSTANCES, inc=True
+                )
+                if occ <= end_normalized
             )
-            # Filter to only those before end_normalized
-            return [occ for occ in occurrences if occ <= end_normalized]
         else:
             return list(rrule.between(start_normalized, end_normalized, inc=True))
 
@@ -1293,6 +1295,9 @@ class ComponentFilter:
         myindex = "C=" + self.name
         if self.is_not_defined:
             return not bool(indexes[myindex])
+
+        if myindex in indexes and not indexes[myindex]:
+            return False
 
         subindexes = create_subindexes(indexes, myindex)
 
