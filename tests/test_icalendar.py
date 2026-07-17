@@ -3131,7 +3131,7 @@ class NormalizeRruleUntilTests(unittest.TestCase):
         normalized = _normalize_rrule_until(rrule_str, dtstart)
 
         # UNTIL should have Z stripped (naive datetime)
-        self.assertEqual("FREQ=YEARLY;UNTIL=20220625T000000Z;WKST=MO", normalized)
+        self.assertEqual("FREQ=YEARLY;UNTIL=20220625T000000;WKST=MO", normalized)
 
     def test_naive_dtstart_with_utc_until_strips_tzinfo(self):
         """Test that UTC UNTIL is stripped when DTSTART is a naive datetime."""
