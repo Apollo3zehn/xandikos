@@ -1877,7 +1877,11 @@ def _normalize_rrule_until(rrule_str: str, dtstart: date | datetime) -> str:
         parsed = vRecur.from_ical(rrule_str)
         if "UNTIL" in parsed:
             until_list = parsed["UNTIL"]
-            if until_list and isinstance(until_list[0], datetime) and until_list[0].tzinfo is not None:
+            if (
+                until_list
+                and isinstance(until_list[0], datetime)
+                and until_list[0].tzinfo is not None
+            ):
                 parsed["UNTIL"] = [until_list[0].replace(tzinfo=None)]
                 return parsed.to_ical().decode("utf-8")
         return rrule_str

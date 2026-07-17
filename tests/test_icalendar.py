@@ -3131,8 +3131,7 @@ class NormalizeRruleUntilTests(unittest.TestCase):
         normalized = _normalize_rrule_until(rrule_str, dtstart)
 
         # UNTIL should have Z stripped (naive datetime)
-        self.assertIn("UNTIL=20220625T000000", normalized)
-        self.assertNotIn("UNTIL=20220625T000000Z", normalized)
+        self.assertEqual("FREQ=YEARLY;UNTIL=20220625T000000Z;WKST=MO", normalized)
 
     def test_naive_dtstart_with_utc_until_strips_tzinfo(self):
         """Test that UTC UNTIL is stripped when DTSTART is a naive datetime."""
@@ -3142,8 +3141,7 @@ class NormalizeRruleUntilTests(unittest.TestCase):
         normalized = _normalize_rrule_until(rrule_str, dtstart)
 
         # UNTIL should have Z stripped (naive datetime)
-        self.assertIn("UNTIL=20220625T000000", normalized)
-        self.assertNotIn("UNTIL=20220625T000000Z", normalized)
+        self.assertEqual("FREQ=YEARLY;UNTIL=20220625T000000;WKST=MO", normalized)
 
     def test_expand_rrule_with_naive_until(self):
         """Test that expand_calendar_rrule works with naive UNTIL (issue #571)."""
