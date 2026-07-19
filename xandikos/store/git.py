@@ -40,7 +40,7 @@ from dulwich.index import (
     locked_index,
 )
 from dulwich.objects import Blob, Commit, Tree
-from dulwich.porcelain import get_user_identity
+from dulwich.repo import get_user_identity
 
 from . import (
     DEFAULT_MIME_TYPE,
