@@ -1871,10 +1871,6 @@ def _normalize_rrule_until(rrule_str: str, dtstart: date | datetime) -> str:
     Returns:
         The RRULE string, possibly modified to have UNTIL in UTC format
     """
-    # Only normalize if dtstart is a timezone-aware datetime
-    if not isinstance(dtstart, datetime) or dtstart.tzinfo is None:
-        return rrule_str
-
     parsed = vRecur.from_ical(rrule_str)
 
     if "UNTIL" not in parsed:
@@ -1886,6 +1882,14 @@ def _normalize_rrule_until(rrule_str: str, dtstart: date | datetime) -> str:
         return rrule_str
 
     until = until_list[0]
+
+    # If dtstart is a plain date or naive datetime, UNTIL must also be naive
+    # because dateutil converts date/naive-datetime dtstart to naive internally
+    if not isinstance(dtstart, datetime) or dtstart.tzinfo is None:
+        if isinstance(until, datetime) and until.tzinfo is not None:
+            parsed["UNTIL"] = [until.replace(tzinfo=None)]
+            return parsed.to_ical().decode("utf-8")
+        return rrule_str
 
     # If UNTIL is a date (not datetime), convert to end of day in UTC
     if isinstance(until, date) and not isinstance(until, datetime):

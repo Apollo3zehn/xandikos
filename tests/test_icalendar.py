@@ -3110,6 +3110,39 @@ class NormalizeRruleUntilTests(unittest.TestCase):
         # Should be unchanged
         self.assertEqual(normalized, rrule_str)
 
+    def test_date_dtstart_with_utc_until_strips_tzinfo(self):
+        """Test that UTC UNTIL is stripped when DTSTART is date-only.
+
+        Older Google Calendar exports (circa 2015) produced non-conformant
+        RRULE output for whole-day recurring events: DTSTART as a plain
+        date but UNTIL with a UTC suffix (e.g. UNTIL=20220625T000000Z).
+        This happened when future occurrences of a recurring event were
+        deleted — Google added a UTC UNTIL to bound the recurrence.
+        Current Google Calendar output is conformant (plain-date UNTIL for
+        whole-day events), but older entries may still exist in calendars.
+
+        dateutil converts the plain-date DTSTART to a naive datetime
+        internally, then raises ValueError because UNTIL is timezone-aware.
+        The fix strips the tzinfo from UNTIL to make both sides naive.
+        """
+        rrule_str = "FREQ=YEARLY;UNTIL=20220625T000000Z;WKST=MO"
+        dtstart = date(2017, 6, 26)  # Plain date, as in Google birthday calendar
+
+        normalized = _normalize_rrule_until(rrule_str, dtstart)
+
+        # UNTIL should have Z stripped (naive datetime)
+        self.assertEqual("FREQ=YEARLY;UNTIL=20220625T000000;WKST=MO", normalized)
+
+    def test_naive_dtstart_with_utc_until_strips_tzinfo(self):
+        """Test that UTC UNTIL is stripped when DTSTART is a naive datetime."""
+        rrule_str = "FREQ=YEARLY;UNTIL=20220625T000000Z;WKST=MO"
+        dtstart = datetime(2017, 6, 26, 0, 0, 0)  # Naive datetime
+
+        normalized = _normalize_rrule_until(rrule_str, dtstart)
+
+        # UNTIL should have Z stripped (naive datetime)
+        self.assertEqual("FREQ=YEARLY;UNTIL=20220625T000000;WKST=MO", normalized)
+
     def test_expand_rrule_with_naive_until(self):
         """Test that expand_calendar_rrule works with naive UNTIL (issue #571)."""
         # This is the specific case from iPhone clients
