@@ -27,7 +27,7 @@ from icalendar.cal import Calendar, Event, Alarm, Todo
 from icalendar.prop import vCategory, vText, vDuration, vDDDTypes
 
 from xandikos import collation as _mod_collation
-from xandikos.store import InvalidFileContents
+from xandikos.store import InsufficientIndexDataError, InvalidFileContents
 
 from xandikos.icalendar import (
     CalendarFilter,
@@ -1008,6 +1008,79 @@ END:VCALENDAR
         }
         self.assertTrue(filter.check_from_indexes("file", indexes))
         self.assertTrue(filter.check("file", self.cal))
+
+    def test_rrule_index_based_filtering_tzid_dst(self):
+        """Recurring event with a TZID DTSTART must not be expanded from the index.
+
+        The index stores DTSTART by its wall-clock value only (the TZID
+        parameter is dropped when the property is serialized), so it comes back
+        as a naive datetime.  A weekly event at 09:05 Europe/Berlin happens at
+        07:05Z in summer but 08:05Z in winter; expanding the naive value would
+        pin every occurrence to the same wall-clock time in UTC and silently
+        move the winter instances by an hour.  For such events the matcher must
+        report insufficient index data so the store falls back to expanding the
+        real file, which keeps the original timezone.
+        """
+        # Only the lines relevant to the bug: a DTSTART/DTEND carrying a
+        # Windows TZID (which icalendar resolves to Europe/Berlin) and a
+        # weekly RRULE.  No VTIMEZONE block is needed for the timezone to
+        # resolve.
+        tzid_rrule = b"""\
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+DTSTART;TZID=W. Europe Standard Time:20250722T090500
+DTEND;TZID=W. Europe Standard Time:20250722T095000
+RRULE:FREQ=WEEKLY;UNTIL=20270720T070500Z;BYDAY=TU
+UID:2a5666700a3972be13eed0a9183cad638dbb0deb32f45b65ba8b1b56c819ba77
+END:VEVENT
+END:VCALENDAR
+"""
+        self.cal = ICalendarFile([tzid_rrule], "text/calendar")
+
+        def make_filter(start, end):
+            filter = CalendarFilter(ZoneInfo("UTC"))
+            filter.filter_subcomponent("VCALENDAR").filter_subcomponent(
+                "VEVENT"
+            ).filter_time_range(start=self._tzify(start), end=self._tzify(end))
+            return filter
+
+        # The store indexes a file by asking the filter which keys it needs
+        # and serializing those properties from the file.
+        winter_hit = make_filter(
+            datetime(2026, 1, 6, 8, 0, 0), datetime(2026, 1, 6, 9, 0, 0)
+        )
+        keys = [key for key_set in winter_hit.index_keys() for key in key_set]
+        indexes = self.cal.get_indexes(keys)
+
+        # The TZID parameter is not part of the indexed value, so DTSTART is
+        # indexed as a naive wall-clock timestamp (no trailing Z).
+        self.assertEqual(
+            indexes["C=VCALENDAR/C=VEVENT/P=DTSTART"], [b"20250722T090500"]
+        )
+
+        # A true winter occurrence: 2026-01-06 09:05 Berlin == 08:05Z (CET).
+        # The index cannot answer this reliably and must defer to the real file.
+        self.assertRaises(
+            InsufficientIndexDataError,
+            winter_hit.check_from_indexes,
+            "file",
+            indexes,
+        )
+        # The authoritative real-file check finds the occurrence.
+        self.assertTrue(winter_hit.check("file", self.cal))
+
+        # The window that would only match if the naive wall-clock value were
+        # expanded in UTC (09:00-10:00Z in winter) is not a real occurrence.
+        winter_ghost = make_filter(
+            datetime(2026, 1, 6, 9, 0, 0), datetime(2026, 1, 6, 10, 0, 0)
+        )
+        self.assertRaises(
+            InsufficientIndexDataError,
+            winter_ghost.check_from_indexes,
+            "file",
+            indexes,
+        )
+        self.assertFalse(winter_ghost.check("file", self.cal))
 
     def test_rrule_index_based_filtering_with_exceptions(self):
         """Test rrule filtering with recurring events that have exception instances."""

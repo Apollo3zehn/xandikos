@@ -943,6 +943,23 @@ class ComponentTimeRangeMatcher:
                 )
             return False
 
+        # A DTSTART carrying a TZID parameter is serialized into the index by
+        # its wall-clock value alone (ICalendarFile._get_index calls
+        # vDDDTypes.to_ical(), which drops the TZID parameter), so it appears
+        # here as a naive datetime. Expanding the RRULE from that naive value
+        # loses the timezone, and the naive occurrences no longer identify the
+        # correct instants: the sample event recurs at 09:05 Europe/Berlin,
+        # i.e. 07:05Z in summer but 08:05Z in winter across the DST boundary.
+        # A naive index value cannot be distinguished from a genuine floating
+        # time, so defer to the authoritative expansion of the real file.
+        # Genuine UTC datetimes keep their trailing Z and remain timezone-aware
+        # here; UTC has no DST, so expanding those directly is safe.
+        if isinstance(dtstart_parsed, datetime) and dtstart_parsed.tzinfo is None:
+            raise InsufficientIndexDataError(
+                "recurring event with a naive DTSTART cannot be reliably "
+                "expanded from index data; falling back to full file check"
+            )
+
         # Get component handler for testing occurrences
         try:
             component_handler = self.component_handlers[self.comp]
